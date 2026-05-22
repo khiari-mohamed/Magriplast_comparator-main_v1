@@ -1,0 +1,108 @@
+import { useState, useEffect } from "react";
+import { getJobResults, getAuditTrail } from "../api/jobs";
+
+/**
+ * Normalise a single line-verdict object coming from the backend.
+ *
+ * The backend LineComparisonResult schema uses `ref_produit` as the primary
+ * key, but the ResultsPage components expect `line_ref` for display.
+ * We map here (in the data layer) so every consumer gets a consistent shape
+ * and we never have silent `undefined` → "—" rendering bugs again.
+ *
+ * Canonical frontend shape for a line verdict:
+ *   line_ref          ← ref_produit   (BC-side reference, always present)
+ *   line_ref_facture  ← ref_produit_facture
+ *   line_ref_bl       ← ref_produit_bl
+ *   designation
+ *   qty_bc / qty_bl / qty_facture
+ *   prix_bc / prix_facture
+ *   tva_bc / tva_facture
+ *   verdict
+ *   mismatch_fields
+ *   confidence
+ *   match_layer
+ *   notes
+ */
+function normaliseLineVerdict(raw) {
+  if (!raw) return raw;
+  return {
+    // ── primary alias (the bug fix) ───────────────────────────────────────
+    line_ref:         raw.line_ref         ?? raw.ref_produit         ?? null,
+    line_ref_facture: raw.line_ref_facture ?? raw.ref_produit_facture ?? null,
+    line_ref_bl:      raw.line_ref_bl      ?? raw.ref_produit_bl      ?? null,
+
+    // ── pass-through fields (kept for completeness / future use) ─────────
+    ref_produit:          raw.ref_produit          ?? null,
+    ref_produit_facture:  raw.ref_produit_facture  ?? null,
+    ref_produit_bl:       raw.ref_produit_bl       ?? null,
+
+    designation:  raw.designation  ?? null,
+    qty_bc:       raw.qty_bc       ?? null,
+    qty_bl:       raw.qty_bl       ?? null,
+    qty_facture:  raw.qty_facture  ?? null,
+    prix_bc:      raw.prix_bc      ?? null,
+    prix_facture: raw.prix_facture ?? null,
+    tva_bc:       raw.tva_bc       ?? null,
+    tva_facture:  raw.tva_facture  ?? null,
+    verdict:          raw.verdict          ?? "PARTIAL_DATA",
+    mismatch_fields:  raw.mismatch_fields  ?? [],
+    confidence:       raw.confidence       ?? 1.0,
+    match_layer:      raw.match_layer      ?? 0,
+    notes:            raw.notes            ?? null,
+    field_confidence_map: raw.field_confidence_map ?? {},
+  };
+}
+
+/**
+ * Normalise the full results payload so the rest of the frontend
+ * only deals with the canonical shape above.
+ */
+function normaliseResults(data) {
+  if (!data) return data;
+
+  const mr = data.match_result;
+  if (mr?.line_verdicts) {
+    mr.line_verdicts = mr.line_verdicts.map(normaliseLineVerdict);
+  }
+
+  return data;
+}
+
+export function useJobResults(jobId) {
+  const [results, setResults]     = useState(null);
+  const [auditTrail, setAuditTrail] = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(null);
+
+  useEffect(() => {
+    if (!jobId) return;
+
+    let cancelled = false;
+
+    async function fetchAll() {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const [resultsData, auditData] = await Promise.all([
+          getJobResults(jobId),
+          getAuditTrail(jobId).catch(() => null),
+        ]);
+
+        if (!cancelled) {
+          setResults(normaliseResults(resultsData));
+          setAuditTrail(auditData);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    fetchAll();
+    return () => { cancelled = true; };
+  }, [jobId]);
+
+  return { results, auditTrail, loading, error };
+}
