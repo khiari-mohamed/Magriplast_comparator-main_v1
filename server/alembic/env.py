@@ -15,6 +15,7 @@ from app.models import (
     match_result,
     audit_log,
     supplier_profile,
+    product_alias,
     word_dictionary,
 )
 

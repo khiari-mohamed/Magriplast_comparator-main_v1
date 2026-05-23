@@ -50,6 +50,11 @@ function normaliseLineVerdict(raw) {
     match_layer:      raw.match_layer      ?? 0,
     notes:            raw.notes            ?? null,
     field_confidence_map: raw.field_confidence_map ?? {},
+    reference_alias_applied: raw.reference_alias_applied ?? false,
+    reference_alias_id: raw.reference_alias_id ?? null,
+    reference_alias_external: raw.reference_alias_external ?? null,
+    reference_alias_internal: raw.reference_alias_internal ?? null,
+    reference_alias_supplier_key: raw.reference_alias_supplier_key ?? null,
   };
 }
 

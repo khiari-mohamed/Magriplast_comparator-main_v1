@@ -32,10 +32,14 @@ from app.services.supplier_profile_detector import supplier_profile_detector
 from app.services.adaptive_dictionary import word_dictionary, UnknownToken
 from app.services.value_protection import is_protected_value
 from app.services.extractor import (
-    extract_document_template, extract_document_llm, map_llm_result_to_schema
+    extract_document_template, extract_document_llm, map_llm_result_to_schema,
 )
 from app.services.validator import validate_bc, validate_bl, validate_facture, validate_date_ordering
 from app.services.matcher import run_three_way_match
+from app.services.reference_aliases import (
+    load_reference_alias_map,
+    mark_aliases_used,
+)
 from app.schemas.documents import BonDeCommandeSchema, BonDeLivraison, FactureSchema, DocumentType as SchemaDocType
 
 logger = get_logger(__name__)
@@ -123,21 +127,53 @@ async def _run_pipeline(job_id: str) -> dict:
         await db.commit()
         classified_pages: list[PageClassified] = []
         page_ocr_data: dict[int, dict] = {}
+        page_ocr_source: dict[int, str] = {}
+        page_ocr_confidence: dict[int, float] = {}
         page_images_raw: dict[int, bytes] = {}
         for page_analysis in page_analyses:
             page_num = page_analysis.page_number
+            page_image_b64: str | None = None
 
             if page_analysis.source_type.value == "NATIVE":
                 page_text = page_analysis.raw_text
+                page_ocr_source[page_num] = "native"
             else:
                 raw_image = extract_page_as_image(pdf_bytes, page_num, dpi=400)
                 processed_image = preprocess_page_image(raw_image)
                 storage_client.upload_page_image(job_id, page_num, processed_image)
                 page_images_raw[page_num] = processed_image
-                ocr_result = run_tesseract(processed_image)
-                page_text = ocr_result.full_text
+                page_image_b64 = base64.b64encode(processed_image).decode("ascii")
+                use_gemini_ocr = (
+                    bool(getattr(settings, "use_parallel_vision", False))
+                    and bool(getattr(settings, "gemini_api_key", "").strip())
+                )
+                if use_gemini_ocr:
+                    from app.workers.llm_worker import extract_page_text_gemini
+
+                    ocr_result, gemini_text = await asyncio.gather(
+                        asyncio.to_thread(run_tesseract, processed_image),
+                        extract_page_text_gemini(page_image_b64, page_number=page_num),
+                    )
+                else:
+                    ocr_result = await asyncio.to_thread(run_tesseract, processed_image)
+                    gemini_text = None
+
+                page_text, selected_ocr_source = _select_ocr_text(
+                    tesseract_text=ocr_result.full_text,
+                    tesseract_confidence=ocr_result.mean_confidence,
+                    gemini_text=gemini_text,
+                )
                 page_ocr_data[page_num] = ocr_result.raw_data
-            classification = await classify_page(page_text)
+                page_ocr_source[page_num] = selected_ocr_source
+                page_ocr_confidence[page_num] = ocr_result.mean_confidence
+                await _audit(db, job_id, "PAGE_OCR_COMPLETED", {
+                    "page_number": page_num,
+                    "selected_source": selected_ocr_source,
+                    "tesseract_confidence": round(ocr_result.mean_confidence, 3),
+                    "tesseract_chars": len(ocr_result.full_text or ""),
+                    "gemini_chars": len(gemini_text or ""),
+                })
+            classification = await classify_page(page_text, image_b64=page_image_b64)
             print(f"   Page {page_num}: {classification.doc_type.value} ({int(classification.confidence*100)}%)")
             await _audit(db, job_id, "PAGE_CLASSIFIED", {
                 "page_number": page_num,
@@ -145,6 +181,8 @@ async def _run_pipeline(job_id: str) -> dict:
                 "confidence": classification.confidence,
                 "source_tier": classification.source_tier,
                 "source_type": page_analysis.source_type.value,
+                "ocr_source": page_ocr_source.get(page_num),
+                "ocr_confidence": page_ocr_confidence.get(page_num),
             })
             if classification.doc_type == DocType.UNKNOWN:
                 job.status = JobStatus.REVIEW_REQUIRED
@@ -169,8 +207,15 @@ async def _run_pipeline(job_id: str) -> dict:
         document_groups = group_pages_into_documents(classified_pages)
         for group in document_groups:
             print(f"   {group.doc_type.value}: pages {group.pages}")
+            group_uses_gemini_text = any(
+                page_ocr_source.get(pn) == "gemini" for pn in group.pages
+            )
             for pn in group.pages:
-                if pn in page_ocr_data:
+                if (
+                    not group_uses_gemini_text
+                    and pn in page_ocr_data
+                    and page_ocr_source.get(pn) == "tesseract"
+                ):
                     group.raw_ocr_data_per_page[pn] = page_ocr_data[pn]
                 if pn in page_images_raw:
                     group.page_images_b64[pn] = base64.b64encode(page_images_raw[pn]).decode("ascii")
@@ -188,6 +233,21 @@ async def _run_pipeline(job_id: str) -> dict:
         await db.commit()
 
         extracted_documents: dict[str, BonDeCommandeSchema | BonDeLivraison | FactureSchema] = {}
+        supplier_alias_scopes: dict[str, dict[str, str | None]] = {}
+
+        def remember_supplier_alias_scope(doc_key: str, extracted_doc, detected_profile) -> None:
+            profile_is_specific = detected_profile and not getattr(detected_profile, "is_generic", False)
+            supplier_alias_scopes[doc_key] = {
+                "supplier_id": detected_profile.id if profile_is_specific else None,
+                "supplier_code": (
+                    getattr(detected_profile, "supplier_code", None)
+                    if profile_is_specific else None
+                ),
+                "supplier_name": (
+                    getattr(extracted_doc, "supplier_name", None)
+                    or (detected_profile.name if profile_is_specific else None)
+                ),
+            }
 
         for group in document_groups:
             print(f"   Extracting {group.doc_type.value}...", end="")
@@ -210,74 +270,116 @@ async def _run_pipeline(job_id: str) -> dict:
                     })
 
             schema_doc_type = SchemaDocType(group.doc_type.value)
-            extracted = await extract_document_template(group, detected_profile)
-            _has_no_lines = (
-                extracted is not None
-                and hasattr(extracted, "lines")
-                and len(extracted.lines) == 0
+            group_uses_gemini_text = any(
+                page_ocr_source.get(pn) == "gemini" for pn in group.pages
             )
-            if extracted is None or extracted.extraction_confidence < 0.60 or _has_no_lines:
+
+            if group_uses_gemini_text:
+                extracted = None
+                _has_no_lines = False
+                await _audit(db, job_id, "TEMPLATE_SKIPPED_GEMINI_OCR", {
+                    "doc_type": group.doc_type,
+                    "pages": group.pages,
+                    "reason": (
+                        "Gemini OCR text is clean but not column-aligned for "
+                        "the legacy template parser; using GPT-4o extraction "
+                        "with Gemini OCR as context."
+                    ),
+                })
+            else:
+                extracted = await extract_document_template(group, detected_profile)
+                _has_no_lines = (
+                    extracted is not None
+                    and hasattr(extracted, "lines")
+                    and len(extracted.lines) == 0
+                )
+
+            if (
+                group_uses_gemini_text
+                or extracted is None
+                or extracted.extraction_confidence < 0.60
+                or _has_no_lines
+            ):
                 await _audit(db, job_id, "LLM_FALLBACK_TRIGGERED", {
                     "doc_type": group.doc_type,
                     "pages": group.pages,
                     "reason": (
-                        "Template extraction produced 0 line items"
-                        if _has_no_lines
-                        else "Template extraction confidence too low or failed"
+                        "Gemini OCR text used; template intentionally skipped"
+                        if group_uses_gemini_text
+                        else (
+                            "Template extraction produced 0 line items"
+                            if _has_no_lines
+                            else "Template extraction confidence too low or failed"
+                        )
                     ),
                 })
                 extracted = None
 
-                raw_llm = await extract_document_llm(
-                    group, supplier_profile=detected_profile
-                )
-                if raw_llm:
-                    extracted = await map_llm_result_to_schema(raw_llm, schema_doc_type)
+                raw_extraction: dict | None = None
 
-                    if extracted is None:
-                        raw_llm_retry = await extract_document_llm(
-                            group,
-                            validation_error=(
-                                "Previous extraction returned incomplete data. "
-                                "Ensure all required fields are present."
-                            ),
-                            supplier_profile=detected_profile,
+                if extracted is None:
+                    await _audit(db, job_id, "GPT_FALLBACK_TRIGGERED", {
+                        "doc_type": group.doc_type,
+                        "pages": group.pages,
+                        "reason": (
+                            "Gemini OCR text used as clean context"
+                            if group_uses_gemini_text
+                            else "Template extraction failed or was low confidence"
+                        ),
+                    })
+                    raw_llm = await extract_document_llm(
+                        group, supplier_profile=detected_profile
+                    )
+                    if raw_llm:
+                        extracted = await map_llm_result_to_schema(raw_llm, schema_doc_type)
+                        raw_extraction = raw_llm if extracted is not None else None
+
+                        if extracted is None:
+                            raw_llm_retry = await extract_document_llm(
+                                group,
+                                validation_error=(
+                                    "Previous extraction returned incomplete data. "
+                                    "Ensure all required fields are present."
+                                ),
+                                supplier_profile=detected_profile,
+                            )
+                            if raw_llm_retry:
+                                extracted = await map_llm_result_to_schema(raw_llm_retry, schema_doc_type)
+                                raw_extraction = raw_llm_retry if extracted is not None else None
+
+                if raw_extraction and isinstance(raw_extraction, dict):
+                    unknown_tokens_raw: list[str] = raw_extraction.get("unknown_tokens") or []
+                    unknown_tokens_raw = [
+                        t for t in unknown_tokens_raw[:20]
+                        if t and not is_protected_value(t)
+                    ]
+                    if unknown_tokens_raw:
+                        await _audit(db, job_id, "DICTIONARY_ENRICHMENT_TRIGGERED", {
+                            "doc_type": group.doc_type,
+                            "unknown_tokens": unknown_tokens_raw,
+                        })
+                        supplier_id = (
+                            detected_profile.id
+                            if detected_profile and not detected_profile.is_generic
+                            else None
                         )
-                        if raw_llm_retry:
-                            extracted = await map_llm_result_to_schema(raw_llm_retry, schema_doc_type)
-                    if raw_llm and isinstance(raw_llm, dict):
-                        unknown_tokens_raw: list[str] = raw_llm.get("unknown_tokens") or []
-                        unknown_tokens_raw = [
-                            t for t in unknown_tokens_raw[:20]
-                            if t and not is_protected_value(t)
+                        batch_tokens = [
+                            UnknownToken(
+                                raw_value=tok,
+                                context_words=_extract_context_words(
+                                    group.combined_text, tok, window=5
+                                ),
+                                supplier_id=supplier_id,
+                            )
+                            for tok in unknown_tokens_raw
                         ]
-                        if unknown_tokens_raw:
-                            await _audit(db, job_id, "DICTIONARY_ENRICHMENT_TRIGGERED", {
-                                "doc_type": group.doc_type,
-                                "unknown_tokens": unknown_tokens_raw,
-                            })
-                            supplier_id = (
-                                detected_profile.id
-                                if detected_profile and not detected_profile.is_generic
-                                else None
-                            )
-                            batch_tokens = [
-                                UnknownToken(
-                                    raw_value=tok,
-                                    context_words=_extract_context_words(
-                                        group.combined_text, tok, window=5
-                                    ),
-                                    supplier_id=supplier_id,
-                                )
-                                for tok in unknown_tokens_raw
-                            ]
-                            gpt_context = {
-                                "supplier_name": detected_profile.name if detected_profile else None,
-                                "doc_type": group.doc_type.value,
-                            }
-                            await word_dictionary.correct_unknown_tokens_with_llm(
-                                batch_tokens, gpt_context
-                            )
+                        gpt_context = {
+                            "supplier_name": detected_profile.name if detected_profile else None,
+                            "doc_type": group.doc_type.value,
+                        }
+                        await word_dictionary.correct_unknown_tokens_with_llm(
+                            batch_tokens, gpt_context
+                        )
 
             if extracted is None:
                 print(" ❌ Failed")
@@ -298,16 +400,20 @@ async def _run_pipeline(job_id: str) -> dict:
                 existing_bc = extracted_documents.get("BC")
                 if existing_bc is None or len(extracted.lines) >= len(existing_bc.lines):
                     extracted_documents["BC"] = extracted
+                    remember_supplier_alias_scope("BC", extracted, detected_profile)
             elif isinstance(extracted, BonDeLivraison):
                 val_result = validate_bl(extracted)
                 if "BL" not in extracted_documents:
                     extracted_documents["BL"] = []
                 extracted_documents["BL"].append(extracted)
+                if "BL" not in supplier_alias_scopes:
+                    remember_supplier_alias_scope("BL", extracted, detected_profile)
             elif isinstance(extracted, FactureSchema):
                 val_result = validate_facture(extracted)
                 existing_fac = extracted_documents.get("FACTURE")
                 if existing_fac is None or len(extracted.lines) > len(existing_fac.lines):
                     extracted_documents["FACTURE"] = extracted
+                    remember_supplier_alias_scope("FACTURE", extracted, detected_profile)
             else:
                 continue
 
@@ -434,6 +540,37 @@ async def _run_pipeline(job_id: str) -> dict:
                     supplier_price_tol = _bl_profile.price_tolerance
                     supplier_qty_tol = _bl_profile.quantity_tolerance
 
+        alias_scope = (
+            supplier_alias_scopes.get("FACTURE")
+            or supplier_alias_scopes.get("BL")
+            or supplier_alias_scopes.get("BC")
+            or {}
+        )
+        alias_supplier_name = (
+            alias_scope.get("supplier_name")
+            or getattr(facture, "supplier_name", None)
+            or (
+                getattr(bl[0], "supplier_name", None)
+                if isinstance(bl, list) and bl
+                else getattr(bl, "supplier_name", None)
+            )
+            or getattr(bc, "supplier_name", None)
+        )
+        reference_aliases = await load_reference_alias_map(
+            db,
+            supplier_id=alias_scope.get("supplier_id"),
+            supplier_code=alias_scope.get("supplier_code"),
+            supplier_name=alias_supplier_name,
+        )
+        if reference_aliases:
+            await _audit(db, job_id, "REFERENCE_ALIASES_LOADED", {
+                "supplier_id": alias_scope.get("supplier_id"),
+                "supplier_code": alias_scope.get("supplier_code"),
+                "supplier_name": alias_supplier_name,
+                "alias_count": len(reference_aliases),
+                "external_refs": sorted(reference_aliases.keys())[:20],
+            })
+
         match_result = await run_three_way_match(
             bc=bc,
             bl=bl,
@@ -441,7 +578,14 @@ async def _run_pipeline(job_id: str) -> dict:
             job_id=job_id,
             supplier_price_tolerance=supplier_price_tol,
             supplier_qty_tolerance=supplier_qty_tol,
+            reference_aliases=reference_aliases,
         )
+        used_alias_ids = {
+            _r.reference_alias_id
+            for _r in match_result.line_results
+            if _r.reference_alias_id
+        }
+        await mark_aliases_used(db, used_alias_ids)
         layer_dist: dict[str, int] = {}
         for _r in match_result.line_results:
             _k = f"layer_{_r.match_layer}"
@@ -569,3 +713,25 @@ def _extract_context_words(text: str, token: str, window: int = 5) -> list[str]:
     start = max(0, idx - window)
     end = min(len(words), idx + window + 1)
     return [w for w in words[start:end] if w.lower() != token.lower()]
+
+
+def _select_ocr_text(
+    tesseract_text: str,
+    tesseract_confidence: float,
+    gemini_text: str | None,
+) -> tuple[str, str]:
+    """
+    Choose the OCR text for downstream classification, template extraction,
+    and GPT fallback.
+
+    Tesseract remains the source when it is confident because it also gives us
+    word boxes for spatial extraction. When Tesseract confidence is low,
+    Gemini's plain-text transcription replaces the noisy OCR text.
+    """
+    tess_text = tesseract_text or ""
+    gem_text = (gemini_text or "").strip()
+
+    if gem_text and tesseract_confidence < settings.ocr_confidence_threshold:
+        return gem_text, "gemini"
+
+    return tess_text, "tesseract"

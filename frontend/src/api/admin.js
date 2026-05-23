@@ -12,3 +12,17 @@ export async function submitReview(jobId, { reviewerId, approved, notes }) {
   });
   return response.data;
 }
+
+export async function approveReferenceAlias(
+  jobId,
+  { reviewerId, externalRef, internalRef, supplierName, notes }
+) {
+  const response = await client.post(`/jobs/${jobId}/reference-aliases`, {
+    reviewer_id: reviewerId,
+    external_ref: externalRef,
+    internal_ref: internalRef,
+    supplier_name: supplierName,
+    notes,
+  });
+  return response.data;
+}

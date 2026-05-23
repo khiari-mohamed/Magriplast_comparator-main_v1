@@ -1319,3 +1319,4 @@ async def map_llm_result_to_schema(
     except (KeyError, TypeError, Exception) as e:
         logger.error("llm_schema_mapping_failed doc_type=%s error=%s", doc_type, str(e))
         return None
+

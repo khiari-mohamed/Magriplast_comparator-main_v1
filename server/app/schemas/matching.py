@@ -46,8 +46,13 @@ class LineComparisonResult(BaseModel):
     notes:           Optional[str] = None
 
     # Matching metadata added by the multi-layer engine
-    match_layer:          int  = 0    # 1-5 (0 = unmatched / default)
+    match_layer:          int  = 0    # 1-6 (0 = unmatched / default)
     field_confidence_map: dict = Field(default_factory=dict)
+    reference_alias_applied: bool = False
+    reference_alias_id: Optional[str] = None
+    reference_alias_external: Optional[str] = None
+    reference_alias_internal: Optional[str] = None
+    reference_alias_supplier_key: Optional[str] = None
 
 
 class MatchResultSchema(BaseModel):

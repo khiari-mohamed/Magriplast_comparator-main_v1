@@ -36,3 +36,7 @@ venv/
 .cache/
 *.sqlite3
 minio/minio.exe
+
+# minio binary
+server/minio.exe
+

@@ -3,6 +3,7 @@
 Compares BC ↔ BL ↔ FACTURE line by line.
 
 Matching layers (per line pair):
+  6. Human-approved supplier product alias
   1. Normalized exact ref match
   2. RapidFuzz ratio on normalized ref (≥90 high / ≥75 candidate)
   3. RapidFuzz ratio on normalized description (≥80 high / ≥60 weak)
@@ -26,12 +27,13 @@ from app.schemas.matching import (
     LineVerdict, GlobalVerdict, LineComparisonResult, MatchResultSchema,
 )
 from app.utils.fuzzy import (
-    refs_match_exact, refs_match_fuzzy,
+    refs_match_exact, refs_match_fuzzy, normalize_ref,
     score_line_pair, apply_bonuses,
     MATCH_THRESHOLD, PARTIAL_MATCH_THRESHOLD,
 )
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.services.reference_aliases import ReferenceAlias
 
 logger = get_logger(__name__)
 
@@ -51,6 +53,14 @@ class MatchContext:
     line_total_tolerance: Decimal = field(
         default_factory=lambda: Decimal(str(settings.line_total_tolerance))
     )
+
+
+@dataclass(frozen=True)
+class MatchAssignment:
+    doc_idx: int
+    confidence: float
+    layer: int
+    alias: ReferenceAlias | None = None
 
 
 def _decimal(val) -> Decimal | None:
@@ -198,10 +208,11 @@ def link_documents(
 def _build_assignment(
     bc_lines: list[LineItemSchema],
     doc_lines: list[LineItemSchema],
-) -> dict[int, tuple[int, float, int]]:
+    reference_aliases: dict[str, ReferenceAlias] | None = None,
+) -> dict[int, MatchAssignment]:
     """
     Optimal one-to-one assignment of BC lines to doc lines via Hungarian algorithm.
-    Returns {bc_idx: (doc_idx, final_confidence, match_layer)}.
+    Returns {bc_idx: MatchAssignment}.
     Only includes pairs where composite confidence ≥ PARTIAL_MATCH_THRESHOLD (0.50).
     """
     if not bc_lines or not doc_lines:
@@ -212,15 +223,32 @@ def _build_assignment(
 
     score_mat = np.zeros((n_bc, n_doc), dtype=float)
     layer_mat = np.zeros((n_bc, n_doc), dtype=int)
+    alias_mat: list[list[ReferenceAlias | None]] = [
+        [None for _ in range(n_doc)] for _ in range(n_bc)
+    ]
 
     for i, bc in enumerate(bc_lines):
         for j, doc in enumerate(doc_lines):
-            base, layer = score_line_pair(
-                bc.ref_produit  or "",
-                bc.designation  or "",
-                doc.ref_produit or "",
-                doc.designation or "",
-            )
+            alias = None
+            base, layer = 0.0, 0
+            if reference_aliases:
+                doc_ref_norm = normalize_ref(doc.ref_produit or "")
+                bc_ref_norm = normalize_ref(bc.ref_produit or "")
+                candidate_alias = reference_aliases.get(doc_ref_norm)
+                if (
+                    candidate_alias is not None
+                    and candidate_alias.internal_ref_normalized == bc_ref_norm
+                ):
+                    base = 1.0
+                    layer = 6
+                    alias = candidate_alias
+            if alias is None:
+                base, layer = score_line_pair(
+                    bc.ref_produit  or "",
+                    bc.designation  or "",
+                    doc.ref_produit or "",
+                    doc.designation or "",
+                )
             final = apply_bonuses(
                 base,
                 bc.prix_unitaire  if bc.prix_unitaire  else None,
@@ -230,15 +258,21 @@ def _build_assignment(
             )
             score_mat[i, j] = final
             layer_mat[i, j] = layer
+            alias_mat[i][j] = alias
 
     # Minimize cost = maximize confidence
     row_ind, col_ind = linear_sum_assignment(1.0 - score_mat)
 
-    result: dict[int, tuple[int, float, int]] = {}
+    result: dict[int, MatchAssignment] = {}
     for bc_idx, doc_idx in zip(row_ind, col_ind):
         conf = float(score_mat[bc_idx, doc_idx])
         if conf >= PARTIAL_MATCH_THRESHOLD:
-            result[int(bc_idx)] = (int(doc_idx), conf, int(layer_mat[bc_idx, doc_idx]))
+            result[int(bc_idx)] = MatchAssignment(
+                doc_idx=int(doc_idx),
+                confidence=conf,
+                layer=int(layer_mat[bc_idx, doc_idx]),
+                alias=alias_mat[int(bc_idx)][int(doc_idx)],
+            )
 
     return result
 
@@ -477,7 +511,7 @@ def _reconcile_facture_line_against_bc(
 def _should_reconcile_facture_from_document_total(
     bc_lines: list[LineItemSchema],
     fac_lines: list[LineItemSchema],
-    fac_assignment: dict[int, tuple[int, float, int]],
+    fac_assignment: dict[int, MatchAssignment],
     facture: FactureSchema | None,
     ctx: MatchContext,
 ) -> bool:
@@ -486,8 +520,8 @@ def _should_reconcile_facture_from_document_total(
         return False
 
     fac_to_bc: dict[int, int] = {
-        int(fac_idx): int(bc_idx)
-        for bc_idx, (fac_idx, _conf, _layer) in fac_assignment.items()
+        int(assignment.doc_idx): int(bc_idx)
+        for bc_idx, assignment in fac_assignment.items()
     }
 
     current_sum = Decimal("0")
@@ -634,6 +668,7 @@ def match_line_item(
     ctx: MatchContext,
     match_confidence: float = 1.0,
     match_layer: int = 1,
+    reference_alias: ReferenceAlias | None = None,
     force_facture_reconciliation: bool = False,
     trusted_facture_tva_rate: Decimal | None = None,
 ) -> LineComparisonResult:
@@ -664,6 +699,14 @@ def match_line_item(
     qty_fac = _decimal(facture_line.qty)  if facture_line else None
 
     qty_warnings: list[str] = list(reconciliation_notes)
+    if reference_alias is not None:
+        # A human-approved alias resolves the low reference confidence that
+        # caused the review item. Field mismatches below still win.
+        extraction_conf = max(extraction_conf, 0.80)
+        qty_warnings.append(
+            "Reference alias applied: "
+            f"{reference_alias.external_ref} -> {reference_alias.internal_ref}"
+        )
 
     if bl_line and qty_bc and qty_bl:
         ok, warning = _compare_quantities(
@@ -770,6 +813,13 @@ def match_line_item(
         match_layer=match_layer,
         field_confidence_map=field_confidence_map,
         notes="; ".join(qty_warnings) if qty_warnings else None,
+        reference_alias_applied=reference_alias is not None,
+        reference_alias_id=reference_alias.id if reference_alias else None,
+        reference_alias_external=reference_alias.external_ref if reference_alias else None,
+        reference_alias_internal=reference_alias.internal_ref if reference_alias else None,
+        reference_alias_supplier_key=(
+            reference_alias.supplier_key if reference_alias else None
+        ),
     )
 
 
@@ -781,6 +831,7 @@ async def run_three_way_match(
     job_id: str,
     supplier_price_tolerance: float | None = None,
     supplier_qty_tolerance: float | None = None,
+    reference_aliases: dict[str, ReferenceAlias] | None = None,
 ) -> MatchResultSchema:
     """
     Main entry point for 3-way matching.
@@ -807,12 +858,20 @@ async def run_three_way_match(
     bc_lines  = list(bc.lines)
     bl_lines  = list(aggregated_bl_lines)
     fac_lines = list(facture.lines) if facture else []
-    bl_assignment: dict[int, tuple[int, float, int]] = {}
+    bl_assignment: dict[int, MatchAssignment] = {}
     if bl_lines:
-        bl_assignment = _build_assignment(bc_lines, bl_lines)
-    fac_assignment: dict[int, tuple[int, float, int]] = {}
+        bl_assignment = _build_assignment(
+            bc_lines,
+            bl_lines,
+            reference_aliases=reference_aliases,
+        )
+    fac_assignment: dict[int, MatchAssignment] = {}
     if fac_lines:
-        fac_assignment = _build_assignment(bc_lines, fac_lines)
+        fac_assignment = _build_assignment(
+            bc_lines,
+            fac_lines,
+            reference_aliases=reference_aliases,
+        )
     reconcile_facture_from_document_total = _should_reconcile_facture_from_document_total(
         bc_lines,
         fac_lines,
@@ -861,21 +920,23 @@ async def run_three_way_match(
                 notes="Product in BC not found in BL",
             ))
             continue
-        bl_line  = bl_lines[bl_assigned[0]]   if bl_assigned  else None
-        fac_line = fac_lines[fac_assigned[0]] if fac_assigned else None
+        bl_line  = bl_lines[bl_assigned.doc_idx]   if bl_assigned  else None
+        fac_line = fac_lines[fac_assigned.doc_idx] if fac_assigned else None
 
         if bl_assigned:
-            matched_bl_indices.add(bl_assigned[0])
+            matched_bl_indices.add(bl_assigned.doc_idx)
         if fac_assigned:
-            matched_fac_indices.add(fac_assigned[0])
+            matched_fac_indices.add(fac_assigned.doc_idx)
         available = [v for v in (bl_assigned, fac_assigned) if v is not None]
         if available:
-            best_assign = max(available, key=lambda x: x[1])
-            match_conf  = best_assign[1]
-            match_layer = best_assign[2]
+            best_assign = max(available, key=lambda x: x.confidence)
+            match_conf  = best_assign.confidence
+            match_layer = best_assign.layer
+            reference_alias = best_assign.alias
         else:
             match_conf  = 1.0
             match_layer = 0
+            reference_alias = None
 
         # Step 4a — Layer 5: LLM arbitration for ambiguous FACTURE matches
         if (
@@ -902,6 +963,7 @@ async def run_three_way_match(
             ctx,
             match_conf,
             match_layer,
+            reference_alias=reference_alias,
             force_facture_reconciliation=reconcile_facture_from_document_total,
             trusted_facture_tva_rate=trusted_tva_rate,
         )

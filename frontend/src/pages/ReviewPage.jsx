@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useJobResults } from "../hooks/useJobResults";
-import { submitReview } from "../api/admin";
+import { approveReferenceAlias, submitReview } from "../api/admin";
 import PageWrapper from "../components/layout/PageWrapper";
 import VerdictBanner from "../components/results/VerdictBanner";
 import DocumentSummary from "../components/results/DocumentSummary";
@@ -20,6 +20,8 @@ export default function ReviewPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
   const [submitted, setSubmitted] = useState(false);
+  const [aliasSaving, setAliasSaving] = useState({});
+  const [aliasSaved, setAliasSaved] = useState({});
 
   const handleSubmit = async (approved) => {
     if (!reviewerId.trim()) {
@@ -38,6 +40,62 @@ export default function ReviewPage() {
       setSubmitError(err.message);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const supplierName =
+    results?.documents?.find((doc) => doc.doc_type === "FACTURE")?.supplier_name ||
+    results?.documents?.find((doc) => doc.doc_type === "BL")?.supplier_name ||
+    null;
+
+  const aliasCandidates = (results?.match_result?.line_verdicts || []).filter((line) => {
+    const externalRef = line.ref_produit_facture || line.ref_produit_bl;
+    const internalRef = line.ref_produit;
+    const qtyMatches =
+      line.qty_bc != null &&
+      (line.ref_produit_facture ? line.qty_facture != null : line.qty_bl != null) &&
+      Number(line.qty_bc) === Number(line.ref_produit_facture ? line.qty_facture : line.qty_bl);
+    const invoicePriceMatches =
+      line.ref_produit_facture &&
+      line.prix_bc != null &&
+      line.prix_facture != null &&
+      Math.abs(Number(line.prix_bc) - Number(line.prix_facture)) <= 0.100;
+    return (
+      externalRef &&
+      internalRef &&
+      externalRef !== internalRef &&
+      ["LOW_CONFIDENCE", "PARTIAL_MATCH", "MATCH"].includes(line.verdict) &&
+      (!line.mismatch_fields || line.mismatch_fields.length === 0) &&
+      !line.reference_alias_applied &&
+      (line.ref_produit_facture ? (qtyMatches && invoicePriceMatches) : qtyMatches)
+    );
+  });
+
+  const handleApproveAlias = async (line) => {
+    if (!reviewerId.trim()) {
+      setSubmitError("Please enter your name or reviewer ID before approving an alias.");
+      return;
+    }
+
+    const externalRef = line.ref_produit_facture || line.ref_produit_bl;
+    const internalRef = line.ref_produit;
+    const key = `${externalRef}:${internalRef}`;
+
+    setAliasSaving((prev) => ({ ...prev, [key]: true }));
+    setSubmitError(null);
+    try {
+      await approveReferenceAlias(jobId, {
+        reviewerId,
+        externalRef,
+        internalRef,
+        supplierName,
+        notes: notes || undefined,
+      });
+      setAliasSaved((prev) => ({ ...prev, [key]: true }));
+    } catch (err) {
+      setSubmitError(err.message);
+    } finally {
+      setAliasSaving((prev) => ({ ...prev, [key]: false }));
     }
   };
 
@@ -100,6 +158,57 @@ export default function ReviewPage() {
         {/* Line table */}
         {results.match_result?.line_verdicts?.length > 0 && (
           <LineItemTable lineVerdicts={results.match_result.line_verdicts} />
+        )}
+
+        {aliasCandidates.length > 0 && (
+          <div className="bg-white border border-gray-200 rounded-xl p-6">
+            <h3 className="text-base font-semibold text-gray-900 mb-4">
+              Aliases de references a memoriser
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 text-xs text-gray-500 uppercase tracking-wide">
+                    <th className="text-left py-2 pr-4 font-semibold">Ref fournisseur</th>
+                    <th className="text-left py-2 pr-4 font-semibold">Ref interne</th>
+                    <th className="text-left py-2 pr-4 font-semibold">Designation</th>
+                    <th className="text-right py-2 font-semibold">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {aliasCandidates.map((line) => {
+                    const externalRef = line.ref_produit_facture || line.ref_produit_bl;
+                    const internalRef = line.ref_produit;
+                    const key = `${externalRef}:${internalRef}`;
+                    const saved = aliasSaved[key];
+                    return (
+                      <tr key={key}>
+                        <td className="py-3 pr-4 font-mono text-xs text-gray-700 whitespace-nowrap">
+                          {externalRef}
+                        </td>
+                        <td className="py-3 pr-4 font-mono text-xs text-gray-700 whitespace-nowrap">
+                          {internalRef}
+                        </td>
+                        <td className="py-3 pr-4 text-xs text-gray-500 max-w-[340px] truncate">
+                          {line.designation || "-"}
+                        </td>
+                        <td className="py-3 text-right">
+                          <button
+                            onClick={() => handleApproveAlias(line)}
+                            disabled={saved || aliasSaving[key]}
+                            className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-700 disabled:bg-gray-300"
+                          >
+                            {aliasSaving[key] ? <Spinner size="sm" /> : <CheckCircle size={14} />}
+                            {saved ? "Enregistre" : "Approuver alias"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
 
         {/* Review form */}

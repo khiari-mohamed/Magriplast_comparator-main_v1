@@ -45,15 +45,25 @@ class Settings(BaseSettings):
     google_docai_processor_id: str = Field(default="")
     google_application_credentials: str = Field(default="")
 
-    # LLM (Claude — fallback only)
+   # LLM — GPT-4o (extraction fallback)
     openai_api_key: str = Field(default="")
     llm_model: str = "gpt-4o"
     llm_max_tokens: int = 1500
     llm_temperature: float = 0.0
-    price_tolerance: float = 0.01       # EUR
-    quantity_tolerance: float = 0.0     # units (exact by default)
-    line_total_tolerance: float = 0.02  # EUR
-    tva_tolerance: float = 0.0          
+
+    # Gemini — parallel vision extractor
+    # Add GEMINI_API_KEY=... and USE_PARALLEL_VISION=true to your .env
+    gemini_api_key: str = Field(default="")
+    gemini_model: str = "gemini-3.5-flash"         # override in .env if needed
+    use_parallel_vision: bool = True
+
+    # Matching tolerances
+    # 0.10 DT covers last-millime OCR rounding (4.339 vs 4.399) without hiding
+    # real discrepancies (which are always > 0.10 DT in TND pricing)
+    price_tolerance: float = 0.10
+    quantity_tolerance: float = 0.0     # units — exact by default
+    line_total_tolerance: float = 0.02
+    tva_tolerance: float = 0.0
     reference_levenshtein_max_distance: int = 2
     max_pdf_size_bytes: int = 52_428_800  # 50MB
     max_pdf_pages: int = 50
