@@ -71,45 +71,125 @@ const fmtNum = (v, dec = 3) =>
   v != null ? Number(v).toLocaleString("fr-TN", { minimumFractionDigits: dec, maximumFractionDigits: dec }) : null;
 const fmtQty = (v) =>
   v != null ? Number(v).toLocaleString("fr-TN", { maximumFractionDigits: 0 }) : null;
-function computeQualityMetrics(documents, match_result) {
+
+const pctValue = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n <= 1 ? n * 100 : n);
+};
+
+const averagePct = (values) => {
+  const valid = values.filter((v) => v != null && Number.isFinite(Number(v)));
+  if (!valid.length) return null;
+  return Math.round(valid.reduce((a, b) => a + Number(b), 0) / valid.length);
+};
+
+const OCR_SOURCE_LABELS = {
+  gemini: "Gemini",
+  tesseract: "Tesseract",
+  native: "Texte PDF",
+};
+
+function computeQualityMetrics(documents, match_result, auditTrail) {
   const byType = {};
   (documents ?? []).forEach((doc) => {
     if (!byType[doc.doc_type]) byType[doc.doc_type] = [];
     byType[doc.doc_type].push(doc);
   });
-  function docTypeAccuracy(type) {
-    const docs = byType[type] ?? [];
-    if (!docs.length) return null;
-    const scores = docs.map((d) => {
-      const map = d.field_confidence_map ?? {};
-      const vals = Object.values(map).filter((v) => typeof v === "number");
-      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : (d.extraction_confidence ?? 0);
-    });
-    return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100);
+
+  const auditEvents = auditTrail?.audit_trail ?? [];
+  const ocrByPage = new Map();
+  const classifiedByPage = new Map();
+  auditEvents.forEach((entry) => {
+    const page = Number(entry?.data?.page_number);
+    if (!Number.isFinite(page)) return;
+    if (entry.event_type === "PAGE_OCR_COMPLETED") ocrByPage.set(page, entry.data);
+    if (entry.event_type === "PAGE_CLASSIFIED") classifiedByPage.set(page, entry.data);
+  });
+
+  function docClassification(type) {
+    const scores = (byType[type] ?? [])
+      .map((doc) => pctValue(doc.classification_confidence));
+    return averagePct(scores);
   }
-  const total   = match_result?.total_lines   ?? 0;
-  const matches = match_result?.match_count   ?? match_result?.matches ?? 0;
-  const matchPct = total > 0 ? Math.round((matches / total) * 100) : null;
-  const scores = [
-    docTypeAccuracy("FACTURE"),
-    docTypeAccuracy("BC"),
-    matchPct,
-  ].filter((v) => v !== null);
-  const overall = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+
+  function docOcr(type) {
+    const scores = [];
+    const sources = new Set();
+    (byType[type] ?? []).forEach((doc) => {
+      (doc.pages ?? []).forEach((pageNumber) => {
+        const page = Number(pageNumber);
+        const ocrData = ocrByPage.get(page);
+        const classData = classifiedByPage.get(page);
+        const source = ocrData?.selected_source ?? classData?.ocr_source;
+        if (!source) return;
+
+        sources.add(OCR_SOURCE_LABELS[source] ?? source);
+        if (source === "gemini" || source === "native") {
+          scores.push(100);
+        } else {
+          scores.push(pctValue(ocrData?.tesseract_confidence ?? classData?.ocr_confidence));
+        }
+      });
+    });
+
+    return {
+      pct: averagePct(scores),
+      source: sources.size ? Array.from(sources).join(" + ") : null,
+    };
+  }
+
+  const lineVerdicts = match_result?.line_verdicts ?? [];
+  const fromRows = lineVerdicts.length > 0;
+  const count = (verdict) => lineVerdicts.filter((line) => line.verdict === verdict).length;
+
+  const matches = fromRows ? count("MATCH") : (match_result?.match_count ?? match_result?.matches ?? 0);
+  const mismatches = fromRows ? count("MISMATCH") : (match_result?.mismatch_count ?? match_result?.mismatches ?? 0);
+  const missing = fromRows ? count("MISSING") : (match_result?.missing_count ?? match_result?.missing ?? 0);
+  const extra = fromRows ? count("EXTRA") : (match_result?.extra_count ?? match_result?.extra ?? 0);
+  const review = fromRows
+    ? lineVerdicts.filter((line) => ["LOW_CONFIDENCE", "PARTIAL_DATA", "PARTIAL_MATCH"].includes(line.verdict)).length
+    : (match_result?.low_confidence_count ?? 0);
+
+  const validatedTotal = matches + mismatches + extra + review;
+  const orderedTotal = matches + mismatches + missing + review;
+  const total = match_result?.total_lines ?? (validatedTotal + missing);
+  const validatedPct = validatedTotal > 0 ? Math.round((matches / validatedTotal) * 100) : null;
+  const coveragePct = orderedTotal > 0 ? Math.round((matches / orderedTotal) * 100) : null;
+  const overallPct =
+    validatedPct == null ? coveragePct
+    : coveragePct == null ? validatedPct
+    : Math.min(validatedPct, coveragePct);
+  const factureOcr = docOcr("FACTURE");
+  const bcOcr = docOcr("BC");
+  const blOcr = docOcr("BL");
 
   return {
-    facture:   docTypeAccuracy("FACTURE"),
-    bc:        docTypeAccuracy("BC"),
-    bl:        docTypeAccuracy("BL"),
-    matching:  matchPct,
-    matchFrac: total > 0 ? `${matches}/${total}` : null,
-    overall,
+    validated:         validatedPct,
+    validatedFrac:     validatedTotal > 0 ? `${matches}/${validatedTotal}` : null,
+    coverage:          coveragePct,
+    coverageFrac:      orderedTotal > 0 ? `${matches}/${orderedTotal}` : null,
+    overall:           overallPct,
+    missing,
+    mismatches,
+    extra,
+    review,
+    total,
+    factureOcr:        factureOcr.pct,
+    factureOcrSource:  factureOcr.source,
+    bcOcr:             bcOcr.pct,
+    bcOcrSource:       bcOcr.source,
+    blOcr:             blOcr.pct,
+    blOcrSource:       blOcr.source,
+    factureClass:      docClassification("FACTURE"),
+    bcClass:           docClassification("BC"),
+    blClass:           docClassification("BL"),
   };
 }
 
 
 function QualityBar({ label, pct, frac, target = 85, sublabel }) {
-  if (pct === null) return null;
+  if (pct == null || Number.isNaN(Number(pct))) return null;
 
   const color =
     pct >= 85 ? { bar: "bg-emerald-500", text: "text-emerald-700", bg: "bg-emerald-50", ring: "ring-emerald-200" }
@@ -157,13 +237,21 @@ function QualityBar({ label, pct, frac, target = 85, sublabel }) {
   );
 }
 
-function QualityScoreSection({ documents, match_result }) {
-  const m = computeQualityMetrics(documents, match_result);
+function QualityScoreSection({ documents, match_result, auditTrail }) {
+  const m = computeQualityMetrics(documents, match_result, auditTrail);
   const [open, setOpen] = useState(true);
   const overallColor =
-    (m.overall ?? 0) >= 80 ? "text-emerald-600"
-    : (m.overall ?? 0) >= 60 ? "text-amber-600"
+    (m.overall ?? 0) >= 85 ? "text-emerald-600"
+    : (m.overall ?? 0) >= 65 ? "text-amber-600"
     : "text-red-600";
+  const qualityNote =
+    m.mismatches === 0 && m.extra === 0 && m.review === 0
+      ? (
+        m.missing > 0
+          ? `Toutes les lignes facturees sont validees. ${m.missing} article${m.missing > 1 ? "s" : ""} commande${m.missing > 1 ? "s" : ""} non facture${m.missing > 1 ? "s" : ""}.`
+          : "Toutes les lignes controlees sont validees."
+      )
+      : "Des ecarts ou lignes incertaines restent a traiter.";
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -177,8 +265,8 @@ function QualityScoreSection({ documents, match_result }) {
             <Gauge size={14} className="text-slate-500" />
           </div>
           <div className="text-left">
-            <div className="text-xs font-semibold text-slate-700">Qualité d'extraction courante</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Scores par document · cible 85%</div>
+            <div className="text-xs font-semibold text-slate-700">Qualite metier du controle</div>
+            <div className="text-[10px] text-slate-400 mt-0.5">Exactitude validee + signaux OCR</div>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -194,59 +282,91 @@ function QualityScoreSection({ documents, match_result }) {
       {open && (
         <div className="px-5 py-1">
           {/* Bars */}
-          {m.facture !== null && (
+          {m.validated !== null && (
             <QualityBar
-              label="Extraction Facture"
-              sublabel="précision des champs extraits"
-              pct={m.facture}
+              label="Lignes facturees validees"
+              sublabel="hors articles non factures"
+              pct={m.validated}
+              frac={m.validatedFrac}
               target={85}
             />
           )}
-          {m.bc !== null && (
+          {m.coverage !== null && (
             <QualityBar
-              label="Extraction BC"
-              sublabel="précision des champs extraits"
-              pct={m.bc}
+              label="Couverture commande"
+              sublabel="part des lignes BC retrouvees en facture"
+              pct={m.coverage}
+              frac={m.coverageFrac}
               target={85}
             />
           )}
-          {m.bl !== null && (
+          {m.factureOcr !== null && (
             <QualityBar
-              label="Extraction BL"
-              sublabel="précision des champs extraits"
-              pct={m.bl}
-              target={85}
+              label="Lecture OCR Facture"
+              sublabel="source texte utilisee"
+              pct={m.factureOcr}
+              frac={m.factureOcrSource}
+              target={90}
             />
           )}
-          {m.matching !== null && (
+          {m.factureClass !== null && (
             <QualityBar
-              label="Exactitude du rapprochement"
-              sublabel="lignes BC correctement appariées"
-              pct={m.matching}
-              frac={m.matchFrac}
-              target={85}
+              label="Classification Facture"
+              sublabel="type de document detecte"
+              pct={m.factureClass}
+              target={90}
             />
           )}
-
-          {/* Expected-after-fixes note */}
-          <div className="flex items-start gap-2.5 mt-3 mb-3 rounded-lg bg-violet-50 border border-violet-100 px-3.5 py-2.5">
-            <Target size={13} className="text-violet-500 mt-0.5 shrink-0" />
+          {m.bcOcr !== null && (
+            <QualityBar
+              label="Lecture OCR BC"
+              sublabel="source texte utilisee"
+              pct={m.bcOcr}
+              frac={m.bcOcrSource}
+              target={90}
+            />
+          )}
+          {m.bcClass !== null && (
+            <QualityBar
+              label="Classification BC"
+              sublabel="type de document detecte"
+              pct={m.bcClass}
+              target={90}
+            />
+          )}
+          {m.blOcr !== null && (
+            <QualityBar
+              label="Lecture OCR BL"
+              sublabel="source texte utilisee"
+              pct={m.blOcr}
+              frac={m.blOcrSource}
+              target={90}
+            />
+          )}
+          {m.blClass !== null && (
+            <QualityBar
+              label="Classification BL"
+              sublabel="type de document detecte"
+              pct={m.blClass}
+              target={90}
+            />
+          )}
+          {/* Business note */}
+          <div className="flex items-start gap-2.5 mt-3 mb-3 rounded-lg bg-emerald-50 border border-emerald-100 px-3.5 py-2.5">
+            <Target size={13} className="text-emerald-500 mt-0.5 shrink-0" />
             <div>
-              <span className="text-[11px] font-semibold text-violet-700">Score attendu après corrections : </span>
-              <span className="text-[11px] text-violet-600">
-                ~85% — priorités : parser décimal TND (number_parser.py), filtre produit facture (extractor.py),
-                vérification qty dans matcher.py.
-              </span>
+              <span className="text-[11px] font-semibold text-emerald-700">Lecture du score : </span>
+              <span className="text-[11px] text-emerald-600">{qualityNote}</span>
             </div>
           </div>
 
           {/* Legend */}
           <div className="flex items-center gap-3 pb-3 flex-wrap">
-            <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Légende :</span>
+            <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Legende :</span>
             {[
-              { cls: "bg-emerald-500", label: "≥ 85% — Bon" },
-              { cls: "bg-amber-400",   label: "65–84% — À améliorer" },
-              { cls: "bg-red-500",     label: "< 65% — Critique" },
+              { cls: "bg-emerald-500", label: ">= 85% - Bon" },
+              { cls: "bg-amber-400",   label: "65-84% - A ameliorer" },
+              { cls: "bg-red-500",     label: "< 65% - Critique" },
             ].map(({ cls, label }) => (
               <span key={label} className="flex items-center gap-1 text-[10px] text-slate-500">
                 <span className={`w-2 h-2 rounded-full ${cls}`} />
@@ -255,7 +375,7 @@ function QualityScoreSection({ documents, match_result }) {
             ))}
             <span className="flex items-center gap-1 text-[10px] text-slate-400">
               <span className="inline-block w-px h-3 bg-slate-300 mx-0.5" />
-              barre verticale = cible 85%
+              barre verticale = cible de la ligne
             </span>
           </div>
         </div>
@@ -861,7 +981,7 @@ export default function ResultsPage() {
         </div>
 
         {/* ══ QUALITY SCORE ══ */}
-        <QualityScoreSection documents={documents} match_result={match_result} />
+        <QualityScoreSection documents={documents} match_result={match_result} auditTrail={auditTrail} />
 
         {/* ══ HUMAN REVIEW CTA ══ */}
         {needsReview && (

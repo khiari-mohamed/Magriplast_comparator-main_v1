@@ -46,6 +46,8 @@ async def get_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
             "ref_document": doc.ref_document,
             "document_date": doc.document_date.isoformat() if doc.document_date else None,
             "supplier_name": doc.supplier_name_raw,
+            "classification_confidence": doc.classification_confidence,
+            "classification_source_tier": doc.classification_source_tier,
             "extraction_confidence": doc.extraction_confidence,
             "extraction_source_tier": doc.extraction_source_tier,
             "has_low_confidence_fields": doc.has_low_confidence_fields,
