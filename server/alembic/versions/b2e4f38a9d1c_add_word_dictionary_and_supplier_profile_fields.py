@@ -485,8 +485,7 @@ def upgrade() -> None:
         )
 
     # 4. Seed word_dictionary with generic industrial terms
-    word_dict_table = sa.table(
-        "word_dictionary",
+    seed_columns = [
         sa.column("id", UUID(as_uuid=True)),
         sa.column("raw_form", sa.String()),
         sa.column("canonical_form", sa.String()),
@@ -494,7 +493,19 @@ def upgrade() -> None:
         sa.column("weight", sa.Float()),
         sa.column("source", word_source_enum),
         sa.column("usage_count", sa.Integer()),
-    )
+    ]
+    has_verified = column_exists("word_dictionary", "verified")
+    has_ignored = column_exists("word_dictionary", "ignored")
+    has_supplier_id = column_exists("word_dictionary", "supplier_id")
+
+    if has_verified:
+        seed_columns.append(sa.column("verified", sa.Boolean()))
+    if has_ignored:
+        seed_columns.append(sa.column("ignored", sa.Boolean()))
+    if has_supplier_id:
+        seed_columns.append(sa.column("supplier_id", sa.String()))
+
+    word_dict_table = sa.table("word_dictionary", *seed_columns)
 
     existing_raw_forms = set()
     result = op.get_bind().execute(sa.text("SELECT raw_form FROM word_dictionary"))
@@ -503,17 +514,23 @@ def upgrade() -> None:
     rows_to_insert = []
     for raw, canonical, category in _SEED_WORDS:
         if raw not in existing_raw_forms:
-            rows_to_insert.append(
-                {
-                    "id": uuid.uuid4(),
-                    "raw_form": raw,
-                    "canonical_form": canonical,
-                    "category": category,
-                    "weight": 1.0,
-                    "source": "MANUAL",
-                    "usage_count": 0,
-                }
-            )
+            row = {
+                "id": uuid.uuid4(),
+                "raw_form": raw,
+                "canonical_form": canonical,
+                "category": category,
+                "weight": 1.0,
+                "source": "MANUAL",
+                "usage_count": 0,
+            }
+            if has_verified:
+                row["verified"] = True
+            if has_ignored:
+                row["ignored"] = False
+            if has_supplier_id:
+                row["supplier_id"] = None
+
+            rows_to_insert.append(row)
 
     if rows_to_insert:
         op.bulk_insert(word_dict_table, rows_to_insert)

@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     job_timeout_seconds: int = 300
 
 
+    # JWT / Auth  ← ADD THESE inside the Settings class
+    secret_key: str = Field(default="CHANGE_ME_USE_OPENSSL_RAND_HEX_32_IN_PROD")
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()

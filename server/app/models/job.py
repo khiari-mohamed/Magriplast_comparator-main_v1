@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, Integer, Enum as SAEnum, func
+from sqlalchemy import String, DateTime, Integer, Enum as SAEnum, func, ForeignKey, Column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 import enum
@@ -49,6 +49,8 @@ class Job(Base):
     file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, nullable=True)
     uploaded_by: Mapped[str] = mapped_column(String(255), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    owner = relationship("User", back_populates="jobs")
     error_message: Mapped[str] = mapped_column(String(2000), nullable=True)
     processing_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     processing_completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)

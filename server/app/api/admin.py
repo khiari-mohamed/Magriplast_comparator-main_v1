@@ -17,6 +17,12 @@ from app.services.reference_aliases import (
     choose_supplier_alias_key,
 )
 from app.utils.fuzzy import normalize_ref
+from app.core.storage import storage_client
+from app.models.line_item import LineItem
+from app.schemas.documents import BonDeCommandeSchema, BonDeLivraison, FactureSchema, LineItemSchema
+from app.services.matcher import run_three_way_match
+from app.services.reference_aliases import load_reference_alias_map
+from app.workers.pipeline import _get_job as _get_job_from_pipeline, _audit as _audit_from_pipeline
 
 router = APIRouter(tags=["admin"])
 
@@ -281,3 +287,214 @@ async def get_audit_trail(job_id: str, db: AsyncSession = Depends(get_db)):
             for log in logs
         ],
     }
+
+
+@router.get("/jobs/{job_id}/pdf-url")
+async def get_pdf_url(job_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Return a signed URL to view the original uploaded PDF.
+    """
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    if not getattr(job, "original_pdf_key", None):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No original PDF available for this job")
+
+    try:
+        url = storage_client._client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": storage_client._bucket, "Key": job.original_pdf_key},
+            ExpiresIn=3600,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    return {"url": url}
+
+
+@router.patch("/jobs/{job_id}/documents/{document_id}")
+async def patch_document_header(job_id: str, document_id: str, body: dict, db: AsyncSession = Depends(get_db)):
+    """
+    Patch top-level document header fields corrected by a human.
+    """
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if not doc or doc.job_id != job_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found for job")
+
+    fields = {}
+    # Map API field names -> model field names (frontend uses `supplier_name`)
+    field_map = (
+        ("ref_document", "ref_document"),
+        ("document_date", "document_date"),
+        ("supplier_name", "supplier_name_raw"),
+        ("total_ht", "total_ht"),
+        ("total_ttc", "total_ttc"),
+    )
+    for api_field, model_field in field_map:
+        if api_field in body and body[api_field] is not None:
+            val = body[api_field]
+            if api_field == "document_date":
+                # accept ISO date string
+                try:
+                    from datetime import date
+
+                    if isinstance(val, str):
+                        val = date.fromisoformat(val)
+                except Exception:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid document_date format")
+            setattr(doc, model_field, val)
+            fields[api_field] = body[api_field]
+
+    db.add(AuditLog(
+        job_id=job_id,
+        event_type="DOCUMENT_HEADER_EDITED_BY_HUMAN",
+        event_data={"document_id": document_id, "fields": fields},
+        actor=body.get("reviewer_id") or "human",
+    ))
+
+    await db.commit()
+    return {"ok": True}
+
+
+@router.patch("/jobs/{job_id}/documents/{document_id}/lines")
+async def patch_document_lines(job_id: str, document_id: str, body: dict, db: AsyncSession = Depends(get_db)):
+    """
+    Patch existing line items or add new ones from human edits.
+    """
+    edits = body.get("edits", []) or []
+    edit_count = 0
+    for edit in edits:
+        if edit.get("line_id"):
+            result = await db.execute(select(LineItem).where(LineItem.id == edit["line_id"]))
+            line = result.scalar_one_or_none()
+            if line and line.document_id == document_id:
+                for f in ("ref_produit", "designation", "qty", "prix_unitaire", "tva_rate", "total_ligne_ht"):
+                    if f in edit:
+                        setattr(line, f, edit[f])
+                edit_count += 1
+        else:
+            # New line added by human
+            data = {f: edit.get(f) for f in ("ref_produit", "designation", "qty", "prix_unitaire", "tva_rate", "total_ligne_ht")}
+            new_line = LineItem(document_id=document_id, line_number=edit.get("line_number", 0), **data)
+            db.add(new_line)
+            edit_count += 1
+
+    db.add(AuditLog(
+        job_id=job_id,
+        event_type="DOCUMENT_LINES_EDITED_BY_HUMAN",
+        event_data={"document_id": document_id, "edit_count": edit_count},
+        actor=body.get("reviewer_id") or "human",
+    ))
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/jobs/{job_id}/rematch")
+async def rematch(job_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Re-run the three-way matcher using the current (possibly human-edited)
+    extracted data and overwrite the MatchResult row.
+    """
+    # ensure job exists
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    docs = (await db.execute(select(Document).where(Document.job_id == job_id))).scalars().all()
+    if not docs:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No documents for job")
+
+    bc = None
+    bl_list: list[BonDeLivraison] = []
+    facture = None
+
+    for doc in docs:
+        raw = doc.raw_extracted_data or {}
+        try:
+            if doc.doc_type.name == "BC":
+                bc = BonDeCommandeSchema.model_validate(raw) if raw else None
+            elif doc.doc_type.name == "BL":
+                bl_list.append(BonDeLivraison.model_validate(raw) if raw else None)
+            elif doc.doc_type.name == "FACTURE":
+                facture = FactureSchema.model_validate(raw) if raw else None
+        except Exception:
+            # fallback: build minimal schema from DB rows
+            lines = []
+            for li in doc.line_items:
+                lines.append(LineItemSchema(
+                    line_number=li.line_number,
+                    ref_produit=li.ref_produit,
+                    ref_produit_normalized=li.ref_produit_normalized,
+                    designation=li.designation,
+                    qty=li.qty,
+                    prix_unitaire=li.prix_unitaire,
+                    tva_rate=li.tva_rate,
+                    total_ligne_ht=li.total_ligne_ht,
+                ))
+            if doc.doc_type.name == "BC":
+                bc = BonDeCommandeSchema(ref_bc=doc.ref_document or "", document_date=doc.document_date, supplier_name=doc.supplier_name_raw, lines=lines)
+            elif doc.doc_type.name == "BL":
+                bl_list.append(BonDeLivraison(ref_bl=doc.ref_document or "", document_date=doc.document_date, supplier_name=doc.supplier_name_raw, lines=lines))
+            elif doc.doc_type.name == "FACTURE":
+                facture = FactureSchema(ref_facture=doc.ref_document or "", document_date=doc.document_date, supplier_name=doc.supplier_name_raw, lines=lines, total_ht=doc.total_ht, total_ttc=doc.total_ttc, tva_rate=doc.tva_rate)
+
+    if bc is None and facture is None and not bl_list:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid extracted documents to rematch")
+
+    # load reference aliases scoped to supplier from facture (if present) or first doc
+    supplier_id = None
+    supplier_name = None
+    for d in docs:
+        if d.supplier_id:
+            supplier_id = d.supplier_id
+            supplier_name = d.supplier_name_raw
+            break
+
+    reference_aliases = await load_reference_alias_map(db, supplier_id=supplier_id, supplier_name=supplier_name)
+
+    match_result = await run_three_way_match(
+        bc=bc if bc else BonDeCommandeSchema(ref_bc="", lines=[]),
+        bl=bl_list if bl_list else None,
+        facture=facture if facture else None,
+        job_id=job_id,
+        reference_aliases=reference_aliases,
+    )
+
+    # overwrite or create MatchResult row
+    existing = (await db.execute(select(MatchResult).where(MatchResult.job_id == job_id))).scalar_one_or_none()
+    if existing:
+        existing.global_verdict = match_result.global_verdict
+        existing.bc_to_bl_link_confidence = match_result.bc_to_bl_link_confidence
+        existing.bc_to_facture_link_confidence = match_result.bc_to_facture_link_confidence
+        existing.used_fuzzy_link = match_result.used_fuzzy_link
+        existing.total_lines = match_result.total_lines
+        existing.match_count = match_result.match_count
+        existing.mismatch_count = match_result.mismatch_count
+        existing.missing_count = match_result.missing_count
+        existing.extra_count = match_result.extra_count
+        existing.low_confidence_count = match_result.low_confidence_count
+        existing.line_verdicts = [r.model_dump() for r in match_result.line_results]
+    else:
+        mr = MatchResult(
+            job_id=job_id,
+            global_verdict=match_result.global_verdict,
+            bc_to_bl_link_confidence=match_result.bc_to_bl_link_confidence,
+            bc_to_facture_link_confidence=match_result.bc_to_facture_link_confidence,
+            used_fuzzy_link=match_result.used_fuzzy_link,
+            total_lines=match_result.total_lines,
+            match_count=match_result.match_count,
+            mismatch_count=match_result.mismatch_count,
+            missing_count=match_result.missing_count,
+            extra_count=match_result.extra_count,
+            low_confidence_count=match_result.low_confidence_count,
+            line_verdicts=[r.model_dump() for r in match_result.line_results],
+        )
+        db.add(mr)
+
+    await _audit_from_pipeline(db, job_id, "HUMAN_TRIGGERED_REMATCH", {"match_count": match_result.match_count, "mismatch_count": match_result.mismatch_count, "global_verdict": match_result.global_verdict})
+    await db.commit()
+
+    return {"ok": True}

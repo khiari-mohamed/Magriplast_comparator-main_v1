@@ -126,32 +126,69 @@ def validate_facture(facture: FactureSchema) -> ValidationResult:
 
 def validate_date_ordering(
     bc: BonDeCommandeSchema,
-    bl: BonDeLivraison | None,
+    bl: list[BonDeLivraison] | BonDeLivraison | None,
     facture: FactureSchema | None,
 ) -> list[str]:
     """
     Cross-document temporal validation.
-    BL date must be >= BC date.
-    FACTURE date must be >= BL date (if BL present).
-    Returns list of warning strings.
+
+    Rules:
+      1. Each BL date must be >= BC date (delivery cannot precede the order).
+      2. FACTURE date must be >= the LATEST BL date (invoice must come after
+         ALL deliveries, not just the first one).
+      3. When no BL is present, FACTURE date must be >= BC date as a minimum.
+
+    Accepts bl as None, a single BonDeLivraison, or a list — the pipeline
+    stores BLs as a list to support multi-shipment documents, so this function
+    normalises at entry and never assumes a single BL.
+
+    Returns a list of warning strings. Never raises.
     """
-    warnings = []
+    warnings: list[str] = []
 
-    if bc.document_date and bl and bl.document_date:
-        if bl.document_date < bc.document_date:
+    # ── Normalise bl → flat list, filter out any None entries ────────────────
+    if bl is None:
+        bl_docs: list[BonDeLivraison] = []
+    elif isinstance(bl, list):
+        bl_docs = [b for b in bl if b is not None]
+    else:
+        bl_docs = [bl]
+
+    bc_date: date | None = bc.document_date if bc else None
+    fac_date: date | None = facture.document_date if facture else None
+
+    # ── Rule 1: each BL date >= BC date ──────────────────────────────────────
+    # Track (date, ref) pairs of BLs that have a usable date so we can
+    # compute the latest BL date in Rule 2 without a second loop.
+    dated_bls: list[tuple[date, str]] = []
+    for bl_doc in bl_docs:
+        bl_date = bl_doc.document_date
+        bl_ref  = bl_doc.ref_bl or "?"
+        if bl_date is None:
+            continue
+        dated_bls.append((bl_date, bl_ref))
+        if bc_date and bl_date < bc_date:
             warnings.append(
-                f"BL date ({bl.document_date}) is before BC date ({bc.document_date})"
+                f"BL {bl_ref} date ({bl_date}) is before BC date ({bc_date})"
             )
 
-    if bl and bl.document_date and facture and facture.document_date:
-        if facture.document_date < bl.document_date:
-            warnings.append(
-                f"FACTURE date ({facture.document_date}) is before BL date ({bl.document_date})"
-            )
-    elif bc.document_date and facture and facture.document_date:
-        if facture.document_date < bc.document_date:
-            warnings.append(
-                f"FACTURE date ({facture.document_date}) is before BC date ({bc.document_date})"
-            )
+    # ── Rule 2 / Rule 3: FACTURE date vs deliveries or order ─────────────────
+    if fac_date:
+        if dated_bls:
+            # Invoice must come after ALL deliveries — compare against the latest.
+            # Using max() is semantically correct: if BL-2 is dated after BL-1,
+            # the invoice should still be dated after BL-2.
+            latest_bl_date, latest_bl_ref = max(dated_bls, key=lambda t: t[0])
+            if fac_date < latest_bl_date:
+                warnings.append(
+                    f"FACTURE date ({fac_date}) is before latest BL date "
+                    f"({latest_bl_date}, ref: {latest_bl_ref})"
+                )
+        elif bc_date:
+            # No BL in this set — at minimum the invoice must follow the order.
+            if fac_date < bc_date:
+                warnings.append(
+                    f"FACTURE date ({fac_date}) is before BC date ({bc_date})"
+                )
 
     return warnings

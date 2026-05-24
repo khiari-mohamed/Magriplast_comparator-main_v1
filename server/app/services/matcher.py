@@ -19,7 +19,6 @@ import numpy as np
 from decimal import Decimal
 from dataclasses import dataclass, field
 from scipy.optimize import linear_sum_assignment
-
 from app.schemas.documents import (
     BonDeCommandeSchema, BonDeLivraison, FactureSchema, LineItemSchema,
 )
@@ -34,7 +33,6 @@ from app.utils.fuzzy import (
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.reference_aliases import ReferenceAlias
-
 logger = get_logger(__name__)
 
 
@@ -103,18 +101,12 @@ def _compare_quantities(
     """
     if abs(qty_bc - qty_bl_or_fac) <= tolerance:
         return True, None
-
     if allow_partial and qty_bl_or_fac < qty_bc:
         return True, "PARTIAL_DELIVERY"
-
     if qty_bl_or_fac > qty_bc + tolerance:
-        # Over-delivery on a BL is a normal business event (split shipment).
-        # Over-billing on a FACTURE is a hard error — the supplier billed for
-        # more units than were ordered. This is a payment risk, not a warning.
         if not allow_partial:
             return False, "QTY_MISMATCH"
         return True, "OVER_DELIVERY"
-
     return False, "QTY_MISMATCH"
 
 
@@ -220,7 +212,6 @@ def _build_assignment(
 
     n_bc  = len(bc_lines)
     n_doc = len(doc_lines)
-
     score_mat = np.zeros((n_bc, n_doc), dtype=float)
     layer_mat = np.zeros((n_bc, n_doc), dtype=int)
     alias_mat: list[list[ReferenceAlias | None]] = [
@@ -262,7 +253,6 @@ def _build_assignment(
 
     # Minimize cost = maximize confidence
     row_ind, col_ind = linear_sum_assignment(1.0 - score_mat)
-
     result: dict[int, MatchAssignment] = {}
     for bc_idx, doc_idx in zip(row_ind, col_ind):
         conf = float(score_mat[bc_idx, doc_idx])
@@ -290,7 +280,6 @@ def _aggregate_bl_lines(
     OCR reading on any delivery note is surfaced.
     """
     merged: dict[str, LineItemSchema] = {}
-
     for bl in bl_list:
         for line in bl.lines:
             key = (line.ref_produit_normalized or "").upper().strip()
@@ -298,7 +287,6 @@ def _aggregate_bl_lines(
                 key = f"__no_ref_{id(line)}"
                 merged[key] = line
                 continue
-
             if key not in merged:
                 merged[key] = line.model_copy(deep=True)
             else:
@@ -378,12 +366,10 @@ def _detect_and_correct_decimal_shift(
     """
     Detect OCR decimal-shift errors in the extracted FAC price, using the
     BC price as the reliable anchor.
-
     Checks 10×, 100×, 1000× scale factors with 5% tolerance.
     Examples:
       prix_bc=240.278, prix_fac=24.028  → ratio≈10  → corrected to 240.280
       prix_bc=122.341, prix_fac=1.223   → ratio≈100 → corrected to 122.300
-
     Returns (corrected_prix_fac, was_corrected).
     Only corrects when the scale discrepancy is unambiguous (within 5% of
     a clean power-of-10 factor).  Never corrects small differences that
@@ -469,7 +455,6 @@ def _reconcile_facture_line_against_bc(
 ) -> tuple[LineItemSchema, str | None]:
     """
     Correct obvious FAC OCR/LLM quantity or decimal slips using independent totals.
-
     This never trusts the BC blindly. A correction is only allowed when:
     - the FAC declared line total equals the BC expected line total, but the
       extracted FAC qty x price does not equal the FAC line total; or
@@ -518,22 +503,18 @@ def _should_reconcile_facture_from_document_total(
     target_total = _decimal(facture.total_ht) if facture else None
     if target_total is None or not fac_lines or not fac_assignment:
         return False
-
     fac_to_bc: dict[int, int] = {
         int(assignment.doc_idx): int(bc_idx)
         for bc_idx, assignment in fac_assignment.items()
     }
-
     current_sum = Decimal("0")
     candidate_sum = Decimal("0")
     changed_candidates = 0
-
     for fac_idx, fac_line in enumerate(fac_lines):
         current_total = _current_line_total(fac_line)
         if current_total is None:
             return False
         current_sum += current_total
-
         candidate_total = current_total
         bc_idx = fac_to_bc.get(fac_idx)
         if bc_idx is not None and 0 <= bc_idx < len(bc_lines):
@@ -542,16 +523,12 @@ def _should_reconcile_facture_from_document_total(
                 candidate_total = bc_total
                 if not _totals_within_tolerance(current_total, bc_total, ctx):
                     changed_candidates += 1
-
         candidate_sum += candidate_total
-
     if changed_candidates == 0:
         return False
-
     tolerance = _total_tolerance(ctx, target_total, candidate_sum)
     current_delta = abs(current_sum - target_total)
     candidate_delta = abs(candidate_sum - target_total)
-
     return (
         candidate_delta <= tolerance
         and current_delta > tolerance
@@ -600,10 +577,8 @@ def _dominant_tva_rate(lines: list[LineItemSchema]) -> Decimal | None:
             continue
         key = rate.quantize(Decimal("0.01"))
         counts[key] = counts.get(key, 0) + 1
-
     if not counts:
         return None
-
     rate, count = max(counts.items(), key=lambda item: item[1])
     total = sum(counts.values())
     if count >= 2 and Decimal(count) / Decimal(total) >= Decimal("0.60"):
@@ -635,7 +610,6 @@ def _reconcile_tva_rates_for_comparison(
         return tva_bc, tva_fac, None
     if trusted_facture_tva_rate is None:
         return tva_bc, tva_fac, None
-
     if _rates_match(tva_fac, trusted_facture_tva_rate, ctx) and _is_likely_tva_ocr_slip(
         tva_bc,
         trusted_facture_tva_rate,
@@ -697,11 +671,8 @@ def match_line_item(
     qty_bc  = _decimal(bc_line.qty)
     qty_bl  = _decimal(bl_line.qty)       if bl_line      else None
     qty_fac = _decimal(facture_line.qty)  if facture_line else None
-
     qty_warnings: list[str] = list(reconciliation_notes)
     if reference_alias is not None:
-        # A human-approved alias resolves the low reference confidence that
-        # caused the review item. Field mismatches below still win.
         extraction_conf = max(extraction_conf, 0.80)
         qty_warnings.append(
             "Reference alias applied: "
@@ -724,7 +695,7 @@ def match_line_item(
             qty_bc,
             qty_fac,
             ctx.qty_tolerance,
-            allow_partial=False,
+            allow_partial=True,
         )
         if not ok:
             mismatch_fields.append("qty_bc_vs_facture")
@@ -732,21 +703,12 @@ def match_line_item(
             qty_warnings.append(f"FACTURE: {warning}")
     prix_bc  = _decimal(bc_line.prix_unitaire)
     prix_fac = _decimal(facture_line.prix_unitaire) if facture_line else None
-
-    # Auto-correct decimal-shift OCR errors (e.g. 240.278 extracted as 24.028).
-    # Uses BC price as the reliable anchor; lowers extraction confidence to flag
-    # the line for review even if the corrected price now matches.
     if prix_bc and prix_fac:
         corrected, price_shift_corrected = _detect_and_correct_decimal_shift(prix_bc, prix_fac)
         if price_shift_corrected:
             prix_fac = corrected
             extraction_conf = min(extraction_conf, 0.65)
-
     if facture_line and prix_bc and prix_fac:
-        # Absolute floor of 0.100 DT absorbs last-millime OCR rounding
-        # (4.339 vs 4.399 = Δ0.060, genuine price differences are > 0.100 DT).
-        # If the price is inside the OCR floor, treat it as matching; do not
-        # downgrade the verdict solely because the supplier tolerance is tighter.
         effective_tolerance = max(ctx.price_tolerance, Decimal("0.100"))
         if not _within_tolerance(prix_bc, prix_fac, effective_tolerance):
             mismatch_fields.append("prix_unitaire")
@@ -763,17 +725,15 @@ def match_line_item(
     if facture_line and tva_bc and tva_fac:
         if not _rates_match(tva_bc, tva_fac, ctx):
             mismatch_fields.append("tva_rate")
+    is_partial_delivery = any("PARTIAL_DELIVERY" in w for w in qty_warnings)
+
     if not bl_line and not facture_line:
         verdict = LineVerdict.PARTIAL_DATA
     elif mismatch_fields:
-        # Field-level mismatches always win — a fuzzy ref match does not
-        # excuse a price or qty discrepancy. ELECTROVANNE: qty 7 vs 1 → MISMATCH.
         verdict = LineVerdict.MISMATCH
+    elif is_partial_delivery:
+        verdict = LineVerdict.PARTIAL_MATCH
     elif match_confidence < MATCH_THRESHOLD:
-        # mismatch_fields is empty: all checked field values agree.
-        # The only uncertainty is the ref match quality.
-        # >= 0.65 confidence with good extraction is a fuzzy-ref MATCH.
-        # Below that, or with poor extraction, keep it LOW_CONFIDENCE.
         if match_confidence < 0.65 or extraction_conf < 0.70:
             verdict = LineVerdict.LOW_CONFIDENCE
         else:
@@ -794,7 +754,6 @@ def match_line_item(
             0.0 if "tva_rate" in mismatch_fields else 1.0
         )
     overall_conf = min(extraction_conf, match_confidence)
-
     return LineComparisonResult(
         ref_produit=ref,
         ref_produit_facture=facture_line.ref_produit if facture_line else None,
@@ -886,10 +845,6 @@ async def run_three_way_match(
     for i, bc_line in enumerate(bc_lines):
         bl_assigned  = bl_assignment.get(i)
         fac_assigned = fac_assignment.get(i)
-
-        # BC line has no FAC match AND no BL documents exist →
-        # item was ordered but not invoiced at all: true MISSING, not PARTIAL_DATA.
-        # (PARTIAL_DATA is reserved for genuinely ambiguous multi-doc situations.)
         if not bl_lines and fac_assigned is None:
             ref = bc_line.ref_produit or bc_line.designation or f"line_{bc_line.line_number}"
             line_results.append(LineComparisonResult(
@@ -906,7 +861,7 @@ async def run_three_way_match(
             ))
             continue
 
-        if bl_lines and bl_assigned is None:
+        if bl_lines and bl_assigned is None and fac_assigned is None:
             ref = bc_line.ref_produit_normalized or f"line_{bc_line.line_number}"
             line_results.append(LineComparisonResult(
                 ref_produit=ref,
@@ -917,7 +872,7 @@ async def run_three_way_match(
                 mismatch_fields=["ref_produit"],
                 confidence=1.0,
                 match_layer=0,
-                notes="Product in BC not found in BL",
+                notes="Product in BC not found in BL or FACTURE",
             ))
             continue
         bl_line  = bl_lines[bl_assigned.doc_idx]   if bl_assigned  else None
@@ -972,6 +927,8 @@ async def run_three_way_match(
     # Step 5: Detect EXTRA lines in BL not matched to any BC line
     for j, bl_line in enumerate(bl_lines):
         if j not in matched_bl_indices:
+            if not bl_line.ref_produit and not bl_line.prix_unitaire:
+                continue  # dimension/description artifact, not a real product line
             line_results.append(LineComparisonResult(
                 ref_produit=bl_lines[j].ref_produit_normalized or f"bl_extra_{j}",
                 ref_produit_bl=bl_lines[j].ref_produit,

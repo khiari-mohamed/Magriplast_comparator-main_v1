@@ -1007,11 +1007,12 @@ async def extract_document_llm(
         user_content: list | str = []
         for pn in ordered_pdf_pages:
             if pn in group.page_images_b64:
-                user_content.append({
+                image_detail = "high" if len(ordered_pdf_pages) == 1 else "auto"
+        user_content.append({
                     "type": "image_url",
                     "image_url": {
                         "url": f"data:image/png;base64,{group.page_images_b64[pn]}",
-                        "detail": "high",
+                        "detail": image_detail,
                     },
                 })
         user_content.append({"type": "text", "text": ocr_intro})
@@ -1144,6 +1145,18 @@ async def extract_document_llm(
         return None
     except httpx.HTTPError as e:
         logger.error("llm_extraction_http_error doc_type=%s error=%s", group.doc_type, str(e))
+        if not _json_retry:
+            import asyncio as _asyncio
+            logger.warning("llm_extraction_http_error_retrying doc_type=%s", group.doc_type)
+            await _asyncio.sleep(4)
+            return await extract_document_llm(
+                group,
+                validation_error=validation_error,
+                _json_retry=True,
+                _line_count_retry=_line_count_retry,
+                _ref_count_retry=_ref_count_retry,
+                supplier_profile=supplier_profile,
+            )
         return None
 
 

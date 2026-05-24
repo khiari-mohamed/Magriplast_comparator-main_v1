@@ -13,13 +13,11 @@ from app.core.database import AsyncSessionLocal, engine
 from app.core.storage import storage_client
 from app.core.logging import get_logger
 from app.core.config import settings
-
 from app.models.job import Job, JobStatus, GlobalVerdict as JobGlobalVerdict
 from app.models.document import Document, DocumentType, ExtractionSourceTier, PageSourceType
 from app.models.line_item import LineItem
 from app.models.match_result import MatchResult
 from app.models.audit_log import AuditLog
-
 from app.utils.pdf_utils import analyze_pdf_pages, extract_page_as_image
 from app.services.preprocessor import preprocess_page_image
 from app.services.ocr_engine import run_tesseract
@@ -41,7 +39,6 @@ from app.services.reference_aliases import (
     mark_aliases_used,
 )
 from app.schemas.documents import BonDeCommandeSchema, BonDeLivraison, FactureSchema, DocumentType as SchemaDocType
-
 logger = get_logger(__name__)
 
 def run_async(coro):
@@ -102,7 +99,6 @@ async def _run_pipeline(job_id: str) -> dict:
         job.status = JobStatus.PROCESSING
         job.processing_started_at = datetime.now(timezone.utc)
         await db.commit()
-
         await _audit(db, job_id, "PIPELINE_STARTED", {"job_id": job_id})
 
         # ── Layer 0: Download PDF ──────────────────────────────────────
@@ -133,7 +129,6 @@ async def _run_pipeline(job_id: str) -> dict:
         for page_analysis in page_analyses:
             page_num = page_analysis.page_number
             page_image_b64: str | None = None
-
             if page_analysis.source_type.value == "NATIVE":
                 page_text = page_analysis.raw_text
                 page_ocr_source[page_num] = "native"
@@ -231,7 +226,6 @@ async def _run_pipeline(job_id: str) -> dict:
         print("📊 Layer 5: Extracting data...")
         job.status = JobStatus.EXTRACTING
         await db.commit()
-
         extracted_documents: dict[str, BonDeCommandeSchema | BonDeLivraison | FactureSchema] = {}
         supplier_alias_scopes: dict[str, dict[str, str | None]] = {}
 
@@ -505,6 +499,37 @@ async def _run_pipeline(job_id: str) -> dict:
         bc = extracted_documents.get("BC")
         bl = extracted_documents.get("BL")
         facture = extracted_documents.get("FACTURE")
+        # Consolidate scheduled delivery BC lines before matching.
+        # A commande échelonnée has multiple rows with identical ref+price
+        # but different delivery dates. Merge them into one line with summed
+        # qty so the matcher compares total ordered against total invoiced.
+        if bc and bc.lines:
+            from app.utils.fuzzy import normalize_ref as _norm_ref
+            from collections import defaultdict
+            _grouped: dict[tuple, list] = defaultdict(list)
+            _ungrouped = []
+            for _line in bc.lines:
+                _key = (
+                    _norm_ref(_line.ref_produit or ""),
+                    str(_line.prix_unitaire or ""),
+                )
+                if _key[0]:  # only group lines that have a ref
+                    _grouped[_key].append(_line)
+                else:
+                    _ungrouped.append(_line)
+            _consolidated = []
+            for _key, _lines in _grouped.items():
+                if len(_lines) == 1:
+                    _consolidated.append(_lines[0])
+                else:
+                    _merged = _lines[0].model_copy(deep=True)
+                    for _extra in _lines[1:]:
+                        if _merged.qty is not None and _extra.qty is not None:
+                            _merged.qty = _merged.qty + _extra.qty
+                    _consolidated.append(_merged)
+            bc = bc.model_copy(
+                update={"lines": _consolidated + _ungrouped}
+            )
         if bc and facture and bc.lines and facture.lines:
             from app.services.normalizer import normalize_reference as _nr  # zid imprt  l fo9 ta3 l app.service.normalizer 
             bc_refs = {_nr(li.ref_produit or "") for li in bc.lines if li.ref_produit}
