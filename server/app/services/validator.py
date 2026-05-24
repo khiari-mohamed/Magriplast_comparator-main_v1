@@ -156,10 +156,6 @@ def validate_date_ordering(
 
     bc_date: date | None = bc.document_date if bc else None
     fac_date: date | None = facture.document_date if facture else None
-
-    # ── Rule 1: each BL date >= BC date ──────────────────────────────────────
-    # Track (date, ref) pairs of BLs that have a usable date so we can
-    # compute the latest BL date in Rule 2 without a second loop.
     dated_bls: list[tuple[date, str]] = []
     for bl_doc in bl_docs:
         bl_date = bl_doc.document_date
@@ -175,9 +171,6 @@ def validate_date_ordering(
     # ── Rule 2 / Rule 3: FACTURE date vs deliveries or order ─────────────────
     if fac_date:
         if dated_bls:
-            # Invoice must come after ALL deliveries — compare against the latest.
-            # Using max() is semantically correct: if BL-2 is dated after BL-1,
-            # the invoice should still be dated after BL-2.
             latest_bl_date, latest_bl_ref = max(dated_bls, key=lambda t: t[0])
             if fac_date < latest_bl_date:
                 warnings.append(

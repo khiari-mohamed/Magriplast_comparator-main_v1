@@ -25,6 +25,14 @@ export async function getJobStatus(jobId) {
 }
 
 /**
+ * Get recent jobs for sidebar/history views.
+ */
+export async function getRecentJobs(limit = 6) {
+  const response = await client.get(`/jobs?limit=${limit}`);
+  return response.data;
+}
+
+/**
  * Get full matching results for a completed job.
  */
 export async function getJobResults(jobId) {

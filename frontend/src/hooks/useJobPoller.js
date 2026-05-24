@@ -3,11 +3,6 @@ import { getJobStatus } from "../api/jobs";
 
 const TERMINAL_STATUSES = ["COMPLETED", "FAILED", "REVIEW_REQUIRED"];
 const POLL_INTERVAL_MS = 2500;
-
-/**
- * Polls GET /jobs/{jobId} kol 2.5 seconds 7ata tkaml statusw ta5o 3 states (processing, completed, failed)
- * Returns { job, isPolling, error }
- */
 export function useJobPoller(jobId) {
   const [job, setJob] = useState(null);
   const [isPolling, setIsPolling] = useState(false);

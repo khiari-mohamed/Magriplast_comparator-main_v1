@@ -1,7 +1,6 @@
 import hashlib
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.database import get_db
 from app.core.storage import storage_client
 from app.core.config import settings
@@ -9,7 +8,6 @@ from app.models.job import Job, JobStatus
 from app.workers.pipeline import process_document_pipeline
 from app.utils.pdf_utils import get_page_count
 from app.core.logging import get_logger
-
 logger = get_logger(__name__)
 router = APIRouter(tags=["upload"])
 
@@ -35,8 +33,6 @@ async def upload_document(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File exceeds maximum size of {settings.max_pdf_size_bytes // 1024 // 1024}MB",
         )
-
-    # Basic PDF header check basict tnajm t3mlo improve 
     if not file_bytes.startswith(b"%PDF"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

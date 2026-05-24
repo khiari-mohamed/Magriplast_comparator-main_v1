@@ -2,13 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from jose import JWTError
-
 from app.core.database import get_db
 from app.core.security import verify_password, hash_password, create_access_token, create_refresh_token, decode_token
 from app.core.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.auth import RegisterRequest, LoginRequest, RefreshRequest, TokenResponse, UserOut
-
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
@@ -75,5 +73,4 @@ async def me(current_user: User = Depends(get_current_user)):
 
 @router.post("/logout", status_code=204)
 async def logout():
-    # Stateless JWT — client simply discards tokens
     return None

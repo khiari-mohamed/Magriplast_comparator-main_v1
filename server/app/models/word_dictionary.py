@@ -52,10 +52,7 @@ class WordDictionaryEntry(Base):
     )
     # verified: False for LLM_SUGGESTED until confirmed; True for MANUAL/FUZZY
     verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    # ignored: True = entry was detected as a bad entry (code/amount/ref accidentally inserted)
-    # Use this instead of DELETE so history is preserved
     ignored: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # supplier_id: null = global term; set to supplier UUID for supplier-specific terms
     supplier_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     usage_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(

@@ -26,10 +26,8 @@ class GlobalVerdict(str, enum.Enum):
 
 class MatchResult(Base):
     __tablename__ = "match_results"
-
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
     job_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("jobs.id"), nullable=False, unique=True, index=True)
-
     global_verdict: Mapped[GlobalVerdict] = mapped_column(SAEnum(GlobalVerdict), nullable=False)
     bc_to_bl_link_confidence: Mapped[float] = mapped_column(Float, nullable=True)
     bc_to_facture_link_confidence: Mapped[float] = mapped_column(Float, nullable=True)
@@ -41,7 +39,5 @@ class MatchResult(Base):
     extra_count: Mapped[int] = mapped_column(default=0)
     low_confidence_count: Mapped[int] = mapped_column(default=0)
     line_verdicts: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
     job: Mapped["Job"] = relationship("Job", back_populates="match_result")

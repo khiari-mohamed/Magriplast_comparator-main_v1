@@ -323,19 +323,11 @@ export default function UploadPage() {
   );
 }
 
-/* ─────────────────────────────────────────── */
-/*  Helpers                                    */
-/* ─────────────────────────────────────────── */
-
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
-
-/* ─────────────────────────────────────────── */
-/*  StatusChip                                 */
-/* ─────────────────────────────────────────── */
 
 function StatusChip({ status }) {
   if (!status) {
@@ -383,11 +375,6 @@ function StatusChip({ status }) {
   }
   return null;
 }
-
-/* ─────────────────────────────────────────── */
-/*  UploadButton                               */
-/* ─────────────────────────────────────────── */
-
 function UploadButton({ status, onClick }) {
   const isUploading = status === "uploading";
 

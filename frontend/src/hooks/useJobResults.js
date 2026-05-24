@@ -1,28 +1,6 @@
 import { useState, useEffect } from "react";
 import { getJobResults, getAuditTrail } from "../api/jobs";
 
-/**
- * Normalise a single line-verdict object coming from the backend.
- *
- * The backend LineComparisonResult schema uses `ref_produit` as the primary
- * key, but the ResultsPage components expect `line_ref` for display.
- * We map here (in the data layer) so every consumer gets a consistent shape
- * and we never have silent `undefined` → "—" rendering bugs again.
- *
- * Canonical frontend shape for a line verdict:
- *   line_ref          ← ref_produit   (BC-side reference, always present)
- *   line_ref_facture  ← ref_produit_facture
- *   line_ref_bl       ← ref_produit_bl
- *   designation
- *   qty_bc / qty_bl / qty_facture
- *   prix_bc / prix_facture
- *   tva_bc / tva_facture
- *   verdict
- *   mismatch_fields
- *   confidence
- *   match_layer
- *   notes
- */
 function normaliseLineVerdict(raw) {
   if (!raw) return raw;
   return {

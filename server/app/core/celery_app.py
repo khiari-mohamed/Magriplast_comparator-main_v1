@@ -2,8 +2,6 @@ from celery import Celery
 from kombu import Queue, Exchange
 from app.core.config import settings
 from app.core.logging import setup_logging
-
-# Setup logging for Celery workers
 setup_logging()
 
 
@@ -20,7 +18,7 @@ def create_celery_app() -> Celery:
         enable_utc=True,
         task_acks_late=True,         
         task_reject_on_worker_lost=True,
-        worker_prefetch_multiplier=1,  # One task at a time per worker (OCR is heavy)
+        worker_prefetch_multiplier=1, 
         result_expires=86400, 
         # Two separate queues — CPU-bound vs I/O-bound
         task_queues=(
@@ -50,7 +48,4 @@ def create_celery_app() -> Celery:
 
 
 celery_app = create_celery_app()
-
-# Import tasks to register them with Celery
-# This must happen AFTER celery_app is created
 from app.workers import pipeline  # noqa: E402, F401

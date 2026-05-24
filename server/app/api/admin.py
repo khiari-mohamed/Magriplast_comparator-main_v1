@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
-
 from app.core.database import get_db
 from app.models.job import Job, JobStatus, GlobalVerdict
 from app.models.document import Document, DocumentType
@@ -23,7 +22,6 @@ from app.schemas.documents import BonDeCommandeSchema, BonDeLivraison, FactureSc
 from app.services.matcher import run_three_way_match
 from app.services.reference_aliases import load_reference_alias_map
 from app.workers.pipeline import _get_job as _get_job_from_pipeline, _audit as _audit_from_pipeline
-
 router = APIRouter(tags=["admin"])
 
 
@@ -114,10 +112,6 @@ def _line_is_safe_alias_candidate(line: dict) -> bool:
         return False
     if not (line.get("ref_produit") and (line.get("ref_produit_facture") or line.get("ref_produit_bl"))):
         return False
-
-    # Persistent aliases must be learned only from lines where business values
-    # corroborate the reference relationship. This prevents a weak textual match
-    # from becoming a permanent supplier mapping.
     if line.get("ref_produit_facture"):
         qty_bc = line.get("qty_bc")
         qty_facture = line.get("qty_facture")
@@ -322,9 +316,7 @@ async def patch_document_header(job_id: str, document_id: str, body: dict, db: A
     doc = result.scalar_one_or_none()
     if not doc or doc.job_id != job_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found for job")
-
     fields = {}
-    # Map API field names -> model field names (frontend uses `supplier_name`)
     field_map = (
         ("ref_document", "ref_document"),
         ("document_date", "document_date"),
@@ -375,7 +367,6 @@ async def patch_document_lines(job_id: str, document_id: str, body: dict, db: As
                         setattr(line, f, edit[f])
                 edit_count += 1
         else:
-            # New line added by human
             data = {f: edit.get(f) for f in ("ref_produit", "designation", "qty", "prix_unitaire", "tva_rate", "total_ligne_ht")}
             new_line = LineItem(document_id=document_id, line_number=edit.get("line_number", 0), **data)
             db.add(new_line)
@@ -462,8 +453,6 @@ async def rematch(job_id: str, db: AsyncSession = Depends(get_db)):
         job_id=job_id,
         reference_aliases=reference_aliases,
     )
-
-    # overwrite or create MatchResult row
     existing = (await db.execute(select(MatchResult).where(MatchResult.job_id == job_id))).scalar_one_or_none()
     if existing:
         existing.global_verdict = match_result.global_verdict

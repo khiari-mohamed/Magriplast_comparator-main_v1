@@ -2,12 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-
 from app.core.database import get_db
 from app.models.job import Job, JobStatus
 from app.models.match_result import MatchResult
 from app.models.document import Document
-
 router = APIRouter(tags=["results"])
 
 
@@ -83,7 +81,6 @@ async def get_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
             "missing_count": mr.missing_count,
             "extra_count": mr.extra_count,
             "low_confidence_count": mr.low_confidence_count,
-            # Backwards-compatible fields expected by the frontend
             "matches": mr.match_count,
             "mismatches": mr.mismatch_count,
             "missing": mr.missing_count,

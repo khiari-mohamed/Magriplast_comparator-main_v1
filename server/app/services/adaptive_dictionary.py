@@ -48,9 +48,6 @@ logger = logging.getLogger(__name__)
 _CacheEntry = tuple[str, float, str]   # (canonical_form, weight, source)
 _MAX_GPT_WEIGHT = 0.75
 
-# ── BUG-5 FIX: Levenshtein import resolved once at module load, not per loop ──
-# Importing inside the fuzzy-match loop caused 500+ redundant import resolutions
-
 try:
     from Levenshtein import distance as _lev_distance          
 except ImportError:

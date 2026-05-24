@@ -4,13 +4,11 @@ from decimal import Decimal
 from datetime import date
 from enum import Enum
 
-
 class DocumentType(str, Enum):
     BC = "BC"
     BL = "BL"
     FACTURE = "FACTURE"
     UNKNOWN = "UNKNOWN"
-
 
 class ExtractionTier(int, Enum):
     TEMPLATE = 1
@@ -21,7 +19,6 @@ class ExtractionTier(int, Enum):
 
 class LineItemSchema(BaseModel):
     line_number: int
-
     # ── Normalised / parsed values (used for matching and computation) ────────
     ref_produit: Optional[str] = None
     ref_produit_normalized: Optional[str] = None
@@ -31,33 +28,19 @@ class LineItemSchema(BaseModel):
     prix_unitaire: Optional[Decimal] = None
     tva_rate: Optional[Decimal] = None
     total_ligne_ht: Optional[Decimal] = None
-
-    # ── Raw OCR values (preserved verbatim from document for display) ─────────
-    # Never round or alter these — the UI must show exactly what the document says.
     raw_reference: Optional[str] = None
     raw_designation: Optional[str] = None
     raw_qty: Optional[str] = None
     raw_unit_price: Optional[str] = None
     raw_total: Optional[str] = None
-
-    # ── Per-field confidence (0-1) ────────────────────────────────────────────
-    # Derived from OCR word-level confidence scores for the words that make up
-    # each field value.  Values < 0.70 should be flagged in the UI.
     line_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     reference_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     designation_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     quantity_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     unit_price_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     total_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-
-    # ── Math consistency ──────────────────────────────────────────────────────
-    # True  → qty × prix_unitaire ≈ total_ligne_ht (within tolerance)
-    # False → mismatch detected; the line is flagged lowConfidence
-    # None  → not enough fields to check
     math_consistency_ok: Optional[bool] = None
-    math_consistency_ratio: Optional[float] = None  # actual/expected; != 1.0 indicates drift
-
-    # ── Legacy aggregate confidence (kept for backward compat) ───────────────
+    math_consistency_ratio: Optional[float] = None 
     extraction_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     field_confidence_map: dict[str, float] = Field(default_factory=dict)
     has_low_confidence: bool = False

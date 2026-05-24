@@ -123,32 +123,20 @@ def is_protected_value(
         return False
 
     v = value.strip()
-
-    # A. Protected field name
     if field_name and field_name.lower() in _PROTECTED_FIELDS:
         return True
-
-    # B. Product code / technical reference patterns
     if _looks_like_code(v):
         return True
-
-    # C. Dates
     if _DATE_PATTERN.search(v) and len(v) <= 12:
         return True
-
-    # D. Financial amounts (pure numeric with optional spaces/decimals)
     if _FINANCIAL_PATTERN.match(v) and len(v) >= 1:
         return True
-
-    # E. Contact / legal identifiers
     if _FISCAL_PATTERN.search(v):
         return True
     if _EMAIL_PATTERN.search(v):
         return True
     if _IBAN_PATTERN.search(v):
         return True
-
-    # F. Supplier-specific ref patterns
     if supplier_profile is not None:
         for pat in (supplier_profile.ref_patterns or []):
             try:
@@ -171,7 +159,6 @@ def is_normalizable_field(field_name: str) -> bool:
 def is_dictionary_candidate(token: str, field_name: str | None = None) -> bool:
     """
     Return True only if this token is a genuine word candidate for dictionary lookup.
-
     False (= do NOT touch) when the token:
     - is a product code / article reference
     - is a document number (BL/BC/facture)
@@ -180,7 +167,6 @@ def is_dictionary_candidate(token: str, field_name: str | None = None) -> bool:
     - is a dimension / technical spec
     - is a phone / email / fiscal ID / RIB
     - corresponds to a protected field name
-
     True when the token looks like a real word that may have been garbled by OCR:
     - designation words (disk, disq, racc0rd)
     - column headers (qte, desig, p.u.ht)
