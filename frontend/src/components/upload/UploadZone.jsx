@@ -12,14 +12,14 @@ export default function UploadZone({ onFileSelected, disabled }) {
 
       if (rejectedFiles.length > 0) {
         const reasons = rejectedFiles[0].errors.map((e) => e.message).join(", ");
-        setFileError(`File rejected: ${reasons}`);
+        setFileError(`Fichier refusé : ${reasons}`);
         return;
       }
 
       if (acceptedFiles.length > 0) {
         const file = acceptedFiles[0];
         if (file.size > 50 * 1024 * 1024) {
-          setFileError("File is too large. Maximum size is 50MB.");
+          setFileError("Fichier trop volumineux. Taille maximale : 50 Mo.");
           return;
         }
         onFileSelected(file);
@@ -69,21 +69,21 @@ export default function UploadZone({ onFileSelected, disabled }) {
           <div>
             {isDragActive && !isDragReject ? (
               <p className="text-blue-600 font-semibold text-lg">
-                Drop the PDF here
+                Déposez le PDF ici
               </p>
             ) : isDragReject ? (
               <p className="text-red-600 font-semibold text-lg">
-                Only PDF files are accepted
+                Seuls les fichiers PDF sont acceptés
               </p>
             ) : (
               <>
                 <p className="text-gray-700 font-semibold text-lg">
-                  Drag & drop your PDF here
+                  Glissez-déposez votre PDF ici
                 </p>
                 <p className="text-gray-400 text-sm mt-1">
-                  or{" "}
+                  ou{" "}
                   <span className="text-blue-600 underline">
-                    browse to select
+                    parcourez pour sélectionner
                   </span>
                 </p>
               </>
@@ -92,7 +92,7 @@ export default function UploadZone({ onFileSelected, disabled }) {
 
           <div className="flex items-center gap-2 text-xs text-gray-400 mt-2">
             <FileText size={14} />
-            <span>PDF only · Max 50MB · Up to 50 pages</span>
+            <span>PDF uniquement · Max 50 Mo · Jusqu'à 50 pages</span>
           </div>
         </div>
       </div>

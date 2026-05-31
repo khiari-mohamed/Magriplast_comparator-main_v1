@@ -22,6 +22,9 @@ from app.schemas.documents import BonDeCommandeSchema, BonDeLivraison, FactureSc
 from app.services.matcher import run_three_way_match
 from app.services.reference_aliases import load_reference_alias_map
 from app.workers.pipeline import _get_job as _get_job_from_pipeline, _audit as _audit_from_pipeline
+from fastapi.responses import StreamingResponse
+from botocore.exceptions import ClientError
+import io
 router = APIRouter(tags=["admin"])
 
 
@@ -286,25 +289,61 @@ async def get_audit_trail(job_id: str, db: AsyncSession = Depends(get_db)):
 @router.get("/jobs/{job_id}/pdf-url")
 async def get_pdf_url(job_id: str, db: AsyncSession = Depends(get_db)):
     """
-    Return a signed URL to view the original uploaded PDF.
+    Return the same-origin proxy URL for the PDF.
+    The frontend iframe always uses /api/v1/jobs/{id}/pdf — never a raw
+    MinIO/S3 URL — so it works in every environment without CORS or
+    signed-URL lifetime issues.
     """
     result = await db.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Job not found")
     if not getattr(job, "original_pdf_key", None):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No original PDF available for this job")
+        raise HTTPException(status_code=404, detail="No original PDF available for this job")
+
+    # Always return a relative path — the frontend resolves it against the
+    # API base URL set in the axios client, so it works in dev (Vite proxy)
+    # and in prod (same-origin or behind a reverse proxy).
+    return {"url": f"/api/v1/jobs/{job_id}/pdf"}
+
+
+@router.get("/jobs/{job_id}/pdf")
+async def stream_job_pdf(job_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Stream the original PDF through the FastAPI server.
+
+    The server fetches the file from MinIO/S3 using the *internal* endpoint
+    URL (e.g. http://minio:9000 in Docker, http://localhost:9000 in dev).
+    The browser only ever talks to the FastAPI server — no direct MinIO
+    connection, no cross-origin issues, no signed-URL expiry.
+    """
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not getattr(job, "original_pdf_key", None):
+        raise HTTPException(status_code=404, detail="No original PDF available for this job")
 
     try:
-        url = storage_client._client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": storage_client._bucket, "Key": job.original_pdf_key},
-            ExpiresIn=3600,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        stream = storage_client.stream_object(job.original_pdf_key)
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+        if error_code in ("NoSuchKey", "404"):
+            raise HTTPException(status_code=404, detail="PDF not found in storage")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Storage error ({error_code}): could not retrieve PDF. "
+                   f"Check that STORAGE_ENDPOINT_URL is reachable from the server "
+                   f"(current value: see server .env / STORAGE_ENDPOINT_URL).",
+        ) from exc
 
-    return {"url": url}
+    headers = {
+        "Content-Disposition": f'inline; filename="{job_id}.pdf"',
+        # Allow the iframe (same origin via proxy) to display the PDF
+        "X-Frame-Options": "SAMEORIGIN",
+        "Cache-Control": "private, max-age=300",
+    }
+    return StreamingResponse(stream, media_type="application/pdf", headers=headers)
 
 
 @router.patch("/jobs/{job_id}/documents/{document_id}")

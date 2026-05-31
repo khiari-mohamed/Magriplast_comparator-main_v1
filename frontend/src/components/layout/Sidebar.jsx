@@ -22,9 +22,9 @@ const Icon = ({ d, extra }) => (
   </svg>
 );
 
-const UploadIcon  = () => <Icon d={<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></>} />;
-const JobsIcon    = () => <Icon d={<><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></>} />;
-const AdminIcon   = () => <Icon d={<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>} />;
+const UploadIcon   = () => <Icon d={<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></>} />;
+const JobsIcon     = () => <Icon d={<><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></>} />;
+const AdminIcon    = () => <Icon d={<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>} />;
 const CollapseIcon = ({ right }) => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
     stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -96,7 +96,7 @@ function SectionLabel({ label, col }) {
 
 // ── Status dot ───────────────────────────────────────────
 function Dot({ status }) {
-  const c = { completed:"#4caf50", failed:"#f44336", processing:"#2196f3" };
+  const c = { completed: "#4caf50", failed: "#f44336", processing: "#2196f3" };
   return (
     <div style={{
       width: "6px", height: "6px", borderRadius: "50%", flexShrink: 0,
@@ -148,19 +148,19 @@ export default function Sidebar({ mobile = false }) {
         <Link to="/" onClick={close} style={{
           display: "flex", alignItems: "center", gap: "10px", textDecoration: "none",
         }}>
-          <div style={{
-            width: "36px", height: "36px", borderRadius: "9px", flexShrink: 0,
-            background: "rgba(255,255,255,0.11)",
-            border: "1px solid rgba(255,255,255,0.18)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
-              stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-            </svg>
-          </div>
+          {/* Bare logo — no container, no border, blends against dark sidebar */}
+          <img
+            src="/logo.png"
+            alt="Magriplast logo"
+            style={{
+              height: col ? "14px" : "20px",
+              width: "auto",
+              objectFit: "contain",
+              display: "block",
+              flexShrink: 0,
+              mixBlendMode: "screen",
+            }}
+          />
           {!col && (
             <div>
               <p style={{ color: "white", fontSize: "0.95rem", fontWeight: 800, letterSpacing: "-0.3px", lineHeight: 1 }}>
@@ -304,8 +304,8 @@ export default function Sidebar({ mobile = false }) {
               display: "flex", alignItems: "center",
               transition: "color 0.13s, background 0.13s",
             }}
-            onMouseEnter={e => { e.currentTarget.style.color="#ef5350"; e.currentTarget.style.background="rgba(239,83,80,0.12)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color=P.muted; e.currentTarget.style.background="none"; }}
+            onMouseEnter={e => { e.currentTarget.style.color = "#ef5350"; e.currentTarget.style.background = "rgba(239,83,80,0.12)"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = P.muted;   e.currentTarget.style.background = "none"; }}
             >
               <LogoutIcon />
             </button>
@@ -329,8 +329,8 @@ export default function Sidebar({ mobile = false }) {
               display: "flex", alignItems: "center", justifyContent: "center",
               transition: "color 0.15s, background 0.15s",
             }}
-            onMouseEnter={e => { e.currentTarget.style.color="#ef5350"; e.currentTarget.style.background="rgba(239,83,80,0.12)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color=P.muted; e.currentTarget.style.background="rgba(255,255,255,0.05)"; }}
+            onMouseEnter={e => { e.currentTarget.style.color = "#ef5350"; e.currentTarget.style.background = "rgba(239,83,80,0.12)"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = P.muted;   e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
             >
               <LogoutIcon />
             </button>

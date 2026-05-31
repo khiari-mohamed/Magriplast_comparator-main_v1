@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { ScanText, Upload, Cpu, CheckCircle2, AlertCircle, ArrowRight, Loader2 } from "lucide-react";
+import { Upload, Cpu, CheckCircle2, AlertCircle, ArrowRight, Loader2 } from "lucide-react";
 
 const C = {
   primary: "#1e3a5f",
@@ -92,9 +92,9 @@ function StrengthBar({ password }) {
 }
 
 const STEPS = [
-  { num: "01", icon: Upload,     title: "Téléversez vos documents", desc: "PDF de bon de commande et facture" },
-  { num: "02", icon: Cpu,        title: "Analyse automatique",       desc: "OCR + IA extraient chaque ligne" },
-  { num: "03", icon: CheckCircle2, title: "Résultat instantané",     desc: "Écarts détectés et rapport généré" },
+  { num: "01", icon: Upload,       title: "Téléversez vos documents", desc: "PDF de bon de commande et facture" },
+  { num: "02", icon: Cpu,          title: "Analyse automatique",       desc: "OCR + IA extraient chaque ligne" },
+  { num: "03", icon: CheckCircle2, title: "Résultat instantané",       desc: "Écarts détectés et rapport généré" },
 ];
 
 export default function RegisterPage() {
@@ -188,17 +188,18 @@ export default function RegisterPage() {
 
         <div style={{ position:"relative", zIndex:1 }}>
           {/* Logo */}
-          <div style={{ display:"flex", alignItems:"center", gap:"13px", marginBottom:"48px" }}>
-            <div style={{
-              width:"48px", height:"48px", borderRadius:"14px",
-              background:"rgba(255,255,255,0.10)",
-              border:"1px solid rgba(255,255,255,0.20)",
-              display:"flex", alignItems:"center", justifyContent:"center",
-              backdropFilter:"blur(12px)",
-              boxShadow:"0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.15)",
-            }}>
-              <ScanText size={22} color="white" strokeWidth={1.75} />
-            </div>
+          <div style={{ display:"flex", alignItems:"center", gap:"14px", marginBottom:"48px" }}>
+            <img
+              src="/logo.png"
+              alt="Magriplast logo"
+              style={{
+                height: "44px",
+                width: "auto",
+                objectFit: "contain",
+                display: "block",
+                mixBlendMode: "screen",
+              }}
+            />
             <span style={{
               color:"white", fontSize:"1.2rem", fontWeight:700,
               letterSpacing:"-0.3px", fontFamily:"'DM Sans', sans-serif",

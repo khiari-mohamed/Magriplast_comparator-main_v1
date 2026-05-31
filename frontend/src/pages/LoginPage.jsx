@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { ScanText, Zap, BarChart3, ShieldCheck, AlertCircle, ArrowRight, Loader2 } from "lucide-react";
+import { Zap, BarChart3, ShieldCheck, AlertCircle, ArrowRight, Loader2, ScanText } from "lucide-react";
 
 const C = {
   primary: "#1e3a5f",
@@ -64,9 +64,9 @@ function FloatingInput({ label, type = "text", value, onChange, placeholder, aut
 }
 
 const FEATURES = [
-  { icon: ScanText, text: "Extraction automatique par OCR" },
-  { icon: Zap,      text: "Comparaison intelligente des lignes" },
-  { icon: BarChart3, text: "Rapports d'audit détaillés" },
+  { icon: ScanText,    text: "Extraction automatique par OCR" },
+  { icon: Zap,         text: "Comparaison intelligente des lignes" },
+  { icon: BarChart3,   text: "Rapports d'audit détaillés" },
   { icon: ShieldCheck, text: "Données sécurisées et privées" },
 ];
 
@@ -180,17 +180,18 @@ export default function LoginPage() {
 
         <div style={{ position: "relative", zIndex: 1, animation: "fadeUp 0.7s ease both" }}>
           {/* Logo */}
-          <div style={{ display: "flex", alignItems: "center", gap: "13px", marginBottom: "52px" }}>
-            <div style={{
-              width: "48px", height: "48px", borderRadius: "14px",
-              background: "rgba(255,255,255,0.10)",
-              border: "1px solid rgba(255,255,255,0.20)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              backdropFilter: "blur(12px)",
-              boxShadow: "0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.15)",
-            }}>
-              <ScanText size={22} color="white" strokeWidth={1.75} />
-            </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "14px", marginBottom: "52px" }}>
+            <img
+              src="/logo.png"
+              alt="Magriplast logo"
+              style={{
+                height: "44px",
+                width: "auto",
+                objectFit: "contain",
+                display: "block",
+                mixBlendMode: "screen",
+              }}
+            />
             <span style={{
               color: "white", fontSize: "1.2rem", fontWeight: 700,
               letterSpacing: "-0.3px",

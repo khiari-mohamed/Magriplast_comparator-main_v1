@@ -59,7 +59,6 @@ export function useJobResults(jobId) {
 
   useEffect(() => {
     if (!jobId) return;
-
     let cancelled = false;
 
     async function fetchAll() {
@@ -87,5 +86,22 @@ export function useJobResults(jobId) {
     return () => { cancelled = true; };
   }, [jobId]);
 
-  return { results, auditTrail, loading, error };
+  async function refetch() {
+    try {
+      setLoading(true);
+      const [resultsData, auditData] = await Promise.all([
+        getJobResults(jobId),
+        getAuditTrail(jobId).catch(() => null),
+      ]);
+      setResults(normaliseResults(resultsData));
+      setAuditTrail(auditData);
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return { results, auditTrail, loading, error, refetch };
 }
