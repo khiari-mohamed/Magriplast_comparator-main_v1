@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import FooterCredit from "../components/layout/FooterCredit";
 import { Zap, BarChart3, ShieldCheck, AlertCircle, ArrowRight, Loader2, ScanText } from "lucide-react";
 
 const C = {
@@ -95,7 +96,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+    <div style={{ display: "flex", minHeight: "100vh", position: "relative", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display:ital@0;1&display=swap');
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -278,7 +279,7 @@ export default function LoginPage() {
         alignItems: "center",
         justifyContent: "center",
         background: "#eef2f8",
-        padding: "40px 24px",
+        padding: "40px 24px 56px",
         backgroundImage: "radial-gradient(ellipse at 70% 20%, rgba(30,58,95,0.06) 0%, transparent 60%), radial-gradient(ellipse at 20% 80%, rgba(62,31,109,0.05) 0%, transparent 55%)",
       }}>
         <div style={{
@@ -395,6 +396,7 @@ export default function LoginPage() {
           </p>
         </div>
       </div>
+      <FooterCredit fixed />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import FooterCredit from "../components/layout/FooterCredit";
 import { Upload, Cpu, CheckCircle2, AlertCircle, ArrowRight, Loader2 } from "lucide-react";
 
 const C = {
@@ -125,7 +126,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+    <div style={{ display: "flex", minHeight: "100vh", position: "relative", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display:ital@0;1&display=swap');
         *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
@@ -277,7 +278,7 @@ export default function RegisterPage() {
       {/* ── Form panel ───────────────────────────────────────────────── */}
       <div className="form-panel" style={{
         flex:1, display:"flex", alignItems:"center", justifyContent:"center",
-        background:"#eef2f8", padding:"40px 24px", overflowY:"auto",
+        background:"#eef2f8", padding:"40px 24px 56px", overflowY:"auto",
         backgroundImage:"radial-gradient(ellipse at 30% 20%, rgba(62,31,109,0.06) 0%, transparent 55%), radial-gradient(ellipse at 80% 80%, rgba(30,58,95,0.05) 0%, transparent 55%)",
       }}>
         <div style={{ width:"100%", maxWidth:"460px", animation:"fadeUp 0.55s ease 0.2s both" }}>
@@ -383,6 +384,7 @@ export default function RegisterPage() {
           </p>
         </div>
       </div>
+      <FooterCredit fixed />
     </div>
   );
 }
